@@ -1,0 +1,97 @@
+# Default values for kudig
+replicaCount: 1
+
+image:
+  repository: kudig/kudig
+  pullPolicy: IfNotPresent
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Deploy as DaemonSet to run on all nodes
+deploymentMode: daemonset  # daemonset or deployment
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+
+podSecurityContext:
+  runAsNonRoot: false
+
+securityContext:
+  privileged: true
+  capabilities:
+    add:
+      - SYS_PTRACE
+      - NET_ADMIN
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+nodeSelector: {}
+
+tolerations:
+  - operator: Exists
+    effect: NoSchedule
+  - operator: Exists
+    effect: NoExecute
+
+affinity: {}
+
+# kudig configuration
+config:
+  # Enable verbose output
+  verbose: false
+  # Output format: text, json
+  format: json
+  # Custom rules directory (mounted from ConfigMap)
+  rulesDir: /app/rules
+  # Schedule for periodic diagnosis (cron format)
+  schedule: "0 */6 * * *"
+
+# Custom rules ConfigMap
+customRules:
+  enabled: false
+  rules: {}
+
+# RBAC settings
+rbac:
+  create: true
+  rules:
+    - apiGroups: [""]
+      resources: ["nodes", "pods", "events", "componentstatuses"]
+      verbs: ["get", "list", "watch"]
+    - apiGroups: ["apps"]
+      resources: ["daemonsets", "deployments", "replicasets"]
+      verbs: ["get", "list", "watch"]
+
+# Volume mounts for host filesystem access
+hostPaths:
+  - name: host-root
+    hostPath: /
+    mountPath: /host
+    readOnly: true
+  - name: var-log
+    hostPath: /var/log
+    mountPath: /var/log
+    readOnly: true
+  - name: etc
+    hostPath: /etc
+    mountPath: /etc/host
+    readOnly: true
+
+# Prometheus metrics
+metrics:
+  enabled: false
+  port: 9090
+  path: /metrics

@@ -1,88 +1,252 @@
-# kudig.sh - Kubernetes节点诊断日志分析工具
+# kudig - Kubernetes 节点诊断工具
 
-## 简介
+> **快速选择**: 
+> - ✅ [v1.0 Bash 版本](v1-bash/) - **生产可用**，轻量级 Bash 脚本
+> - ✅ [v2.0 Go 版本](v2-go/) - **Alpha 可用**，Go 语言重构
 
-`kudig.sh` 是一个用于分析Kubernetes节点诊断日志的Shell脚本工具。它能够自动分析 `diagnose_k8s.sh` 收集的诊断数据，识别各类异常情况，并生成中英文对照的诊断报告。
+## 项目简介
 
-## 功能特性
+`kudig` 是一个强大的 Kubernetes 节点诊断工具，能够自动识别各类异常情况并生成中英文对照的诊断报告。
 
-- ✅ **全面的异常检测**：涵盖系统资源、进程服务、网络、内核、容器运行时、Kubernetes组件等多个维度
-- ✅ **双语输出**：同时提供中文异常描述和英文异常标识符
-- ✅ **严重级别分类**：异常按严重、警告、提示三个级别分类
-- ✅ **多种输出格式**：支持文本和JSON格式输出
-- ✅ **本地化分析**：完全在本地执行，无需外部依赖
-- ✅ **智能去重**：自动去除重复的异常项
+## 版本说明
 
-## 安装
+### v1.0 - Bash 版本 ✅ 生产可用
 
-将脚本下载到本地并添加执行权限：
+**位置**: [`v1-bash/`](v1-bash/)
 
+- **实现**: Bash 脚本
+- **状态**: 稳定可用
+- **特性**: 40+ 异常检测规则，离线分析模式
+- **优势**: 轻量级、无依赖、开箱即用
+- **文档**: [v1-bash/README.md](v1-bash/README.md)
+
+**快速使用**:
 ```bash
-chmod +x kudig.sh
+cd v1-bash
+./kudig.sh /tmp/diagnose_1702468800
 ```
 
-## 使用方法
+### v2.0 - Go 版本 ✅ Alpha 可用
 
-### 基本用法
+**位置**: [`v2-go/`](v2-go/)
 
+- **实现**: Go 语言
+- **状态**: Alpha 阶段，功能完整
+- **特性**: 
+  - 双模式支持（离线 + 在线）
+  - 35+ 内置分析器
+  - YAML 规则引擎
+  - Kubernetes 原生部署
+  - Docker 镜像
+- **文档**: [v2-go/README.md](v2-go/README.md)
+
+**快速使用**:
 ```bash
-./kudig.sh <诊断目录>
+cd v2-go
+make build
+./build/kudig offline /tmp/diagnose_1702468800
 ```
 
-示例：
+## 项目结构
+
+```
+kudig/
+├── v1-bash/              # ✅ v1.0 Bash 版本（生产可用）
+│   ├── kudig.sh          # 主脚本
+│   ├── README.md         # v1.0 文档
+│   ├── TESTING.md        # 测试说明
+│   └── reference/        # 示例诊断数据
+│
+├── v2-go/                # ✅ v2.0 Go 版本（Alpha 可用）
+│   ├── cmd/              # CLI 入口
+│   ├── pkg/              # 核心包
+│   │   ├── analyzer/     # 分析器（35+）
+│   │   ├── collector/    # 数据收集层
+│   │   ├── reporter/     # 报告生成层
+│   │   └── rules/        # 规则引擎
+│   ├── charts/           # Helm Chart
+│   ├── Makefile          # 构建脚本
+│   ├── Dockerfile        # Docker 构建
+│   └── README.md         # v2.0 文档
+│
+├── docs/                 # 文档目录
+├── scripts/              # 辅助脚本
+├── tests/                # 测试文件
+├── README.md             # 本文档
+└── LICENSE               # 许可证
+```
+
+## 快速开始
+
+### 使用 v1.0 Bash 版本（推荐）
+
+1. **进入 v1-bash 目录**
+```bash
+cd v1-bash
+```
+
+2. **收集诊断数据**
+```bash
+sudo ./diagnose_k8s.sh
+# 生成目录: /tmp/diagnose_1702468800
+```
+
+3. **分析诊断数据**
 ```bash
 ./kudig.sh /tmp/diagnose_1702468800
 ```
 
-### 命令行选项
+详细使用说明请查看 [v1-bash/README.md](v1-bash/README.md)
 
-| 选项 | 说明 |
-|-----|------|
-| `-h, --help` | 显示帮助信息 |
-| `-v, --version` | 显示版本信息 |
-| `--verbose` | 详细输出模式，显示调试信息 |
-| `--json` | 输出JSON格式报告 |
-| `-o, --output <文件>` | 保存报告到指定文件 |
+### 开发 v2.0 Go 版本
 
-### 使用示例
-
-1. **基本分析**：
 ```bash
-./kudig.sh /tmp/diagnose_1702468800
+cd v2-go
+make deps
+make build
+./build/kudig offline /tmp/diagnose_1702468800
 ```
 
-2. **详细模式**：
-```bash
-./kudig.sh --verbose /tmp/diagnose_1702468800
-```
+详细开发说明请查看 [v2-go/README.md](v2-go/README.md)
 
-3. **输出JSON格式**：
-```bash
-./kudig.sh --json /tmp/diagnose_1702468800 > report.json
-```
+## 核心特性对比
 
-4. **保存报告到文件**：
-```bash
-./kudig.sh -o report.txt /tmp/diagnose_1702468800
-```
+| 特性 | v1.0 Bash | v2.0 Go |
+|-----|----------|--------|
+| **状态** | ✅ 生产可用 | ✅ Alpha 可用 |
+| **实现语言** | Bash | Go |
+| **离线分析** | ✅ | ✅ |
+| **在线诊断** | ❌ | ✅ |
+| **检测规则** | 40+ 项 | 35+ 项 |
+| **输出格式** | Text/JSON | Text/JSON |
+| **排查建议** | ✅ | ✅ |
+| **自定义规则** | ❌ | ✅ YAML规则 |
+| **K8s部署** | ❌ | ✅ Helm Chart |
+| **依赖** | 无 | Go 1.21+ |
+| **跨平台** | Linux/Unix | ✅ 支持 |
+
+## 内置检测规则（40+项）
+
+kudig.sh 内置了多个类别的40+项检测规则，自动识别各类异常情况。
+
+### 1. 系统资源检测（6项）
+- **CPU负载检测**：检查15分钟平均负载是否超过CPU核心数2倍/4個
+- **内存使用检测**：检测内存使用率是否超过85%/95%
+- **磁盘空间检测**：检测挂载点使用率是否超过90%/95%
+- **文件句柄检测**：检测进程文件句柄数是否过高(>50000)
+- **进程/线程数检测**：检测PID泄漏，某进程线程数>5000/10000
+- **Inode使用检测**：检测inode使用率是否超过90%
+
+### 2. 进程与服务检测（5项）
+- **Kubelet服务检测**：检测kubelet服务状态（running/failed/stopped）
+- **容器运行时检测**：检测docker/containerd服务状态
+- **僵尸进程检测**：检测是否存在大量僵尸进程(>100/500)
+- **Runc进程检测**：检测runc进程数是否异常(>1000)
+- **Firewalld检测**：检测Firewalld是否在运行（可能影响K8s网络）
+
+### 3. 网络检测（7项）
+- **网卡状态检测**：检测网卡是否DOWN或发生错误
+- **网卡错误检测**：检测网卡丢包、错误、冲突等问题
+- **路由配置检测**：检测路由表是否有异常
+- **连接追踪表检测**：检测conntrack表使用率>80%/95%
+- **端口监听检测**：检测关键端口是否在监听
+- **Iptables规则检测**：检测iptables规则数是否过多(>5000/10000)
+- **网络延迟检测**：检测网络延迟是否异常
+
+### 4. 内核检测（5项）
+- **内核Panic检测**：检测dmesg中是否有kernel panic
+- **OOM Killer检测**：检测是否发生OOM事件
+- **文件系统错误检测**：检测文件系统错误（Ext4-fs error）
+- **内核模块检测**：检测必要的内核模块是否加载
+- **NMI Watchdog检测**：检测NMI watchdog事件
+
+### 5. 容器运行时检测（5项）
+- **Containerd状态检测**：检测containerd服务和日志
+- **Docker状态检测**：检测docker服务和日志
+- **容器异常退出检测**：检测容器频繁重启/异常退出
+- **镜像拉取检测**：检测镜像拉取失败错误
+- **运行时错误检测**：检测runc/containerd错误日志
+
+### 6. Kubernetes组件检测（8项）
+- **PLEG状态检测**：检测PLEG is not healthy错误
+- **CNI插件检测**：检测CNI插件错误（network plugin not ready）
+- **API Server连接检测**：检测与API Server的连接问题
+- **证书过期检测**：检测Kubernetes证书是否过期
+- **节点状态检测**：检测节点是否NotReady
+- **Pod创建失败检测**：检测Pod创建失败错误
+- **卷挂载检测**：检测卷挂载失败错误
+- **Sandbox错误检测**：检测sandbox创建/删除错误
+
+### 7. 时间同步检测（2项）
+- **NTP/Chrony状态检测**：检测时间同步服务状态
+- **时间偏移检测**：检测系统时间偏移是否过大
+
+### 8. 配置检测（3项）
+- **Swap配置检测**：检测Swap是否开启（K8s不建议开启）
+- **SELinux检测**：检测SELinux配置是否影响K8s
+- **系统参数检测**：检测关键系统参数配置
+
+
 
 ## 输出示例
 
-### 文本格式输出
+### 文本格式（默认）
+
+**无异常情况：**
 
 ```
-=== Kubernetes节点诊断异常报告 ===
-诊断时间: 2024-12-13 10:30:00
-节点信息: k8s-node-01
-分析目录: /tmp/diagnose_1702468800
+================================================================
+  kudig.sh v1.0.0 - Kubernetes节点诊断分析工具
+================================================================
+
+诊断目录: /tmp/diagnose_1702468800
+分析时间: 2024-12-13 21:47:00
+
+开始诊断检查...
+
+========== 系统资源检查 ==========
+  [✓] CPU负载: 正常 (15min负载: 0.34, CPU核心: 4)
+  [✓] 内存使用: 正常 (使用率: 31%)
+  [✓] 磁盘空间: 正常 (所有挂载点使用率<90%)
+  ...
+
+========== 诊断结果汇总 ==========
+
+✓ 未检测到异常
+节点状态良好！
+```
+
+**有异常情况：**
+
+```
+================================================================
+  kudig.sh v1.0.0 - Kubernetes节点诊断分析工具
+================================================================
+
+诊断目录: /tmp/diagnose_1702468800
+分析时间: 2024-12-13 21:47:00
+
+开始诊断检查...
+
+========== 系统资源检查 ==========
+  [✓] CPU负载: 正常 (15min负载: 0.34, CPU核心: 4)
+  [✓] 内存使用: 正常 (使用率: 31%)
+  [✗] 磁盘空间 [/]: 不足 (使用率: 92%)
+    → 建议: 检查占用空间大的目录: du -sh /* | sort -rh | head
+  ...
+
+========== 进程与服务检查 ==========
+  [✗] Kubelet服务: failed
+    → 建议: 检查kubelet日志: journalctl -u kubelet -n 100; systemctl restart kubelet
+  ...
+
+================================================================
+  诊断结果汇总
+================================================================
 
 -------------------------------------------
 【严重级别】异常项
 -------------------------------------------
-[严重] 系统负载过高 | HIGH_SYSTEM_LOAD
-  详情: 15分钟平均负载 18.5，超过CPU核心数(4)的4倍
-  位置: system_status
-  
 [严重] Kubelet服务未运行 | KUBELET_SERVICE_DOWN
   详情: kubelet.service状态为failed
   位置: daemon_status/kubelet_status
@@ -90,272 +254,90 @@ chmod +x kudig.sh
 -------------------------------------------
 【警告级别】异常项
 -------------------------------------------
-[警告] 连接跟踪表使用率高 | CONNTRACK_TABLE_HIGH_USAGE
-  详情: 当前连接数 45678/65536 (70%)
-  位置: network_info
-
--------------------------------------------
-【提示级别】异常项
--------------------------------------------
-[提示] Swap未禁用 | SWAP_NOT_DISABLED
-  详情: Kubernetes节点建议禁用swap，当前 2048KB
-  位置: system_info
+[警告] 磁盘空间不足 | DISK_SPACE_LOW
+  详情: 挂载点 / 使用率 92%
+  位置: system_status
 
 -------------------------------------------
 异常统计
 -------------------------------------------
-严重: 2项
+严重: 1项
 警告: 1项
-提示: 1项
-总计: 4项
+提示: 0项
+总计: 2项
 ```
 
-### JSON格式输出
+### JSON格式
 
 ```json
 {
-  "report_version": "1.0",
-  "timestamp": "2024-12-13T02:30:00Z",
-  "hostname": "k8s-node-01",
-  "diagnose_dir": "/tmp/diagnose_1702468800",
+  "metadata": {
+    "report_version": "1.0",
+    "timestamp": "2024-12-13T13:47:00Z",
+    "hostname": "k8s-node-01",
+    "diagnose_dir": "/tmp/diagnose_1702468800"
+  },
   "anomalies": [
     {
       "severity": "严重",
-      "cn_name": "系统负载过高",
-      "en_name": "HIGH_SYSTEM_LOAD",
-      "details": "15分钟平均负载 18.5，超过CPU核心数(4)的4倍",
+      "cn_name": "Kubelet服务未运行",
+      "en_name": "KUBELET_SERVICE_DOWN",
+      "details": "kubelet.service状态为failed",
+      "location": "daemon_status/kubelet_status"
+    },
+    {
+      "severity": "警告",
+      "cn_name": "磁盘空间不足",
+      "en_name": "DISK_SPACE_LOW",
+      "details": "挂载点 / 使用率 92%",
       "location": "system_status"
     }
   ],
   "summary": {
-    "critical": 2,
+    "critical": 1,
     "warning": 1,
-    "info": 1,
-    "total": 4
+    "info": 0,
+    "total": 2
   }
 }
 ```
 
-## 异常检测规则
+## 文档索引
 
-### 系统资源类
+- **主文档**: [README.md](README.md) - 本文档
+- **v1.0 Bash**: [v1-bash/README.md](v1-bash/README.md) - 生产可用版本
+  - [v1-bash/TESTING.md](v1-bash/TESTING.md) - 测试说明
+- **v2.0 Go**: [v2-go/README.md](v2-go/README.md) - 开发版本
+- **质量报告**: [QUALITY_REPORT.md](QUALITY_REPORT.md) - 代码质量检查
 
-| 中文名称 | 英文标识符 | 严重级别 | 说明 |
-|---------|-----------|---------|------|
-| 系统负载过高 | HIGH_SYSTEM_LOAD | 严重 | 15分钟负载超过CPU核心数的4倍 |
-| 系统负载偏高 | ELEVATED_SYSTEM_LOAD | 警告 | 15分钟负载超过CPU核心数的2倍 |
-| 内存使用率过高 | HIGH_MEMORY_USAGE | 严重 | 内存使用率≥95% |
-| 内存使用率偏高 | ELEVATED_MEMORY_USAGE | 警告 | 内存使用率≥85% |
-| 磁盘空间严重不足 | DISK_SPACE_CRITICAL | 严重 | 磁盘使用率≥95% |
-| 磁盘空间不足 | DISK_SPACE_LOW | 警告 | 磁盘使用率≥90% |
-| 文件句柄使用量过高 | HIGH_FILE_HANDLES | 警告 | 进程文件句柄数>50000 |
-| 进程/线程数异常 | PID_LEAK_DETECTED | 严重 | 进程线程数>10000 |
-| Inode使用率过高 | HIGH_INODE_USAGE | 警告 | Inode使用率≥90% |
+## 版本选择指南
 
-### 进程与服务类
+### 何时使用 v1.0 Bash 版本？
 
-| 中文名称 | 英文标识符 | 严重级别 | 说明 |
-|---------|-----------|---------|------|
-| Kubelet服务未运行 | KUBELET_SERVICE_DOWN | 严重 | kubelet服务状态为failed |
-| 容器运行时服务异常 | CONTAINER_RUNTIME_DOWN | 严重 | docker和containerd均为failed |
-| ps命令挂起 | PS_COMMAND_HUNG | 严重 | ps命令执行挂起 |
-| 存在D状态进程 | PROCESS_IN_D_STATE | 严重 | 检测到不可中断睡眠状态进程 |
-| runc进程可能挂起 | RUNC_PROCESS_HANG | 警告 | runc进程可能处于挂起状态 |
-| Firewalld服务运行中 | FIREWALLD_RUNNING | 警告 | K8s节点建议关闭firewalld |
+✅ **推荐场景**:
+- 生产环境诊断
+- 需要快速部署
+- 无法安装额外依赖
+- 离线分析 diagnose_k8s.sh 数据
+- 需要详细的排查建议
 
-### 网络类
+### 何时使用 v2.0 Go 版本？
 
-| 中文名称 | 英文标识符 | 严重级别 | 说明 |
-|---------|-----------|---------|------|
-| 连接跟踪表满 | CONNTRACK_TABLE_FULL | 严重 | 连接跟踪表使用率≥95% |
-| 连接跟踪表使用率高 | CONNTRACK_TABLE_HIGH_USAGE | 警告 | 连接跟踪表使用率≥80% |
-| 网卡接口down | NETWORK_INTERFACE_DOWN | 警告 | 网卡处于down状态 |
-| 缺少默认路由 | NO_DEFAULT_ROUTE | 警告 | 未检测到默认路由 |
-| Kubelet端口未监听 | KUBELET_PORT_NOT_LISTENING | 严重 | 10250端口未监听 |
-| iptables规则过多 | TOO_MANY_IPTABLES_RULES | 警告 | iptables规则数>50000 |
-
-### 内核与驱动类
-
-| 中文名称 | 英文标识符 | 严重级别 | 说明 |
-|---------|-----------|---------|------|
-| 内核Panic | KERNEL_PANIC | 严重 | 内核发生panic事件 |
-| 内核触发OOM杀进程 | KERNEL_OOM_KILLER | 严重 | 内核OOM Killer被触发 |
-| 系统内存不足 | SYSTEM_OUT_OF_MEMORY | 严重 | 系统日志显示内存不足 |
-| 文件系统只读 | FILESYSTEM_READONLY | 严重 | 文件系统被重新挂载为只读 |
-| 磁盘IO错误 | DISK_IO_ERROR | 严重 | 检测到多次IO错误 |
-| 内核模块加载失败 | KERNEL_MODULE_LOAD_FAILED | 警告 | 内核模块加载失败 |
-
-### 容器运行时类
-
-| 中文名称 | 英文标识符 | 严重级别 | 说明 |
-|---------|-----------|---------|------|
-| Docker启动失败 | DOCKER_START_FAILED | 严重 | Docker服务启动失败 |
-| Docker存储驱动错误 | DOCKER_STORAGE_DRIVER_ERROR | 严重 | Docker存储驱动出现错误 |
-| 容器创建失败率高 | CONTAINER_CREATE_FAILED | 警告 | 容器创建失败次数过多 |
-| 镜像拉取失败 | IMAGE_PULL_FAILED | 警告 | 镜像拉取失败次数过多 |
-
-### Kubernetes组件类
-
-| 中文名称 | 英文标识符 | 严重级别 | 说明 |
-|---------|-----------|---------|------|
-| Kubelet PLEG不健康 | KUBELET_PLEG_UNHEALTHY | 严重 | Pod生命周期事件生成器不健康 |
-| CNI网络插件错误 | CNI_PLUGIN_ERROR | 严重 | CNI网络插件失败 |
-| 证书已过期 | CERTIFICATE_EXPIRED | 严重 | Kubelet证书已过期 |
-| 证书即将过期 | CERTIFICATE_EXPIRING | 警告 | Kubelet证书即将过期 |
-| API Server连接失败 | APISERVER_CONNECTION_FAILED | 严重 | 无法连接到API Server |
-| Kubelet认证失败 | KUBELET_AUTH_FAILED | 严重 | Kubelet认证失败 |
-| Pod被驱逐 | POD_EVICTED | 警告 | Pod被驱逐，可能资源不足 |
-| 节点NotReady状态 | NODE_NOT_READY | 严重 | 节点处于NotReady状态 |
-| 磁盘压力 | DISK_PRESSURE | 警告 | 节点存在磁盘压力 |
-| 内存压力 | MEMORY_PRESSURE | 警告 | 节点存在内存压力 |
-
-### 配置类
-
-| 中文名称 | 英文标识符 | 严重级别 | 说明 |
-|---------|-----------|---------|------|
-| 时间同步服务未运行 | TIME_SYNC_SERVICE_DOWN | 提示 | ntpd和chronyd均未运行 |
-| Swap未禁用 | SWAP_NOT_DISABLED | 提示 | K8s节点建议禁用swap |
-| IP转发未启用 | IP_FORWARD_DISABLED | 警告 | net.ipv4.ip_forward=0 |
-| bridge-nf-call-iptables未启用 | BRIDGE_NF_CALL_IPTABLES_DISABLED | 警告 | 内核参数需要启用 |
-| 文件句柄限制过低 | LOW_ULIMIT_NOFILE | 提示 | ulimit open files建议≥65536 |
-| SELinux处于Enforcing模式 | SELINUX_ENFORCING | 提示 | SELinux可能影响K8s运行 |
-
-## 退出码
-
-| 退出码 | 说明 |
-|-------|------|
-| 0 | 未检测到异常 |
-| 1 | 检测到警告或提示级别异常 |
-| 2 | 检测到严重级别异常 |
-
-## 系统要求
-
-- **操作系统**：Linux（Red Hat、CentOS、Aliyun Linux、Kylin等）
-- **Shell**：bash 4.0+
-- **必需命令**：grep, awk, sed, wc, sort, uniq, tail, head, find
-
-## 工作流程
-
-1. **数据收集**：使用 `diagnose_k8s.sh` 收集节点诊断数据
-2. **数据分析**：运行 `kudig.sh` 分析诊断数据
-3. **异常识别**：自动检测各类异常情况
-4. **报告生成**：生成中英文对照的诊断报告
-
-```
-┌─────────────────┐
-│ diagnose_k8s.sh │ ──► 收集诊断数据
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│   诊断目录       │
-│  /tmp/diagnose_ │
-│   ${timestamp}  │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│   kudig.sh      │ ──► 分析诊断数据
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│   诊断报告       │
-│ (文本/JSON)     │
-└─────────────────┘
-```
-
-## 典型使用场景
-
-### 场景1：节点故障快速诊断
-
-```bash
-# 1. 收集诊断数据
-sudo ./diagnose_k8s.sh
-
-# 2. 分析诊断数据
-./kudig.sh /tmp/diagnose_1702468800
-
-# 3. 根据报告中的异常标识符查找解决方案
-```
-
-### 场景2：自动化巡检
-
-```bash
-#!/bin/bash
-# 定期巡检脚本
-
-# 收集诊断数据
-sudo /opt/scripts/diagnose_k8s.sh
-
-# 分析最新的诊断数据
-LATEST_DIAGNOSE=$(ls -t /tmp/diagnose_* | head -1)
-/opt/scripts/kudig.sh --json "$LATEST_DIAGNOSE" > /var/log/kudig_report.json
-
-# 检查退出码
-if [ $? -eq 2 ]; then
-    # 发现严重异常，发送告警
-    send_alert "严重异常" /var/log/kudig_report.json
-fi
-```
-
-### 场景3：与监控系统集成
-
-```bash
-# 生成JSON格式报告
-./kudig.sh --json /tmp/diagnose_1702468800 | \
-    curl -X POST -H "Content-Type: application/json" \
-    -d @- http://monitoring-server/api/diagnostics
-```
-
-## 故障排除
-
-### 问题1：脚本提示命令不存在
-
-**解决方案**：安装缺失的命令
-```bash
-# CentOS/RHEL
-yum install -y grep gawk sed coreutils findutils
-
-# Ubuntu/Debian
-apt-get install -y grep gawk sed coreutils findutils
-```
-
-### 问题2：诊断目录结构不完整
-
-**现象**：警告信息"诊断目录结构可能不完整"
-
-**解决方案**：确保使用完整的 `diagnose_k8s.sh` 脚本收集数据，并以root权限执行
-
-### 问题3：无法读取某些日志文件
-
-**现象**：某些检测项没有结果
-
-**解决方案**：
-- 确保诊断数据收集时有足够权限
-- 检查日志文件是否存在于诊断目录中
-
-## 版本历史
-
-- **v1.0.0** (2024-12-13)
-  - 初始版本发布
-  - 支持8大类异常检测
-  - 支持文本和JSON输出格式
+✅ **适用场景**:
+- 需要在线实时诊断 K8s 集群
+- 需要自定义 YAML 规则
+- 需要 Kubernetes 原生部署（DaemonSet）
+- 需要跨平台支持（Windows/macOS）
+- 希望参与开源开发
 
 ## 贡献
 
-欢迎提交Issue和Pull Request来改进此工具。
+欢迎贡献！请阅读各版本的 README 了解详情。
 
 ## 许可证
 
 本项目采用 Apache License 2.0 许可证。
 
-## 联系方式
-
-如有问题或建议，请通过以下方式联系：
-- 提交GitHub Issue
-- 发送邮件至项目维护者
-
 ---
 
-**注意**：本工具仅用于诊断分析，不会修改任何系统配置或日志文件。
+**版本说明**: v1.0 Bash 版本为生产可用的稳定版本；v2.0 Go 版本功能完整，处于 Alpha 阶段，欢迎测试反馈。

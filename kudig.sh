@@ -291,23 +291,45 @@ parse_arguments() {
 # 从system_info中提取CPU核心数
 get_cpu_cores() {
     local system_info="$DIAGNOSE_DIR/system_info"
+    local system_status="$DIAGNOSE_DIR/system_status"
+    local cores=""
+    
+    # 方法1: 从system_info的/proc/cpuinfo提取
     if [[ -f "$system_info" ]]; then
-        # 尝试从 /proc/cpuinfo 或 lscpu 输出中提取
-        local cores=$(grep -c "^processor" "$system_info" 2>/dev/null || echo "0")
-        if [[ $cores -eq 0 ]]; then
-            cores=$(grep -oP 'CPU\(s\):\s*\K\d+' "$system_info" 2>/dev/null | head -1 || echo "4")
-        fi
-        echo "$cores"
-    else
-        echo "4"  # 默认值
+        cores=$(grep -c "^processor" "$system_info" 2>/dev/null || echo "")
+        cores=$(echo "$cores" | tr -d '\n\r\t ')
     fi
+    
+    # 方法2: 从system_info的lscpu提取
+    if [[ -z "$cores" || "$cores" == "0" ]] && [[ -f "$system_info" ]]; then
+        cores=$(grep -E 'CPU\(s\):' "$system_info" 2>/dev/null | head -1 | awk '{print $2}' | tr -d '\n\r\t ' || echo "")
+    fi
+    
+    # 方法3: 从system_status的top输出中统计cpuhp进程数量
+    if [[ -z "$cores" || "$cores" == "0" ]] && [[ -f "$system_status" ]]; then
+        cores=$(grep -c "cpuhp/" "$system_status" 2>/dev/null || echo "")
+        cores=$(echo "$cores" | tr -d '\n\r\t ')
+    fi
+    
+    # 方法4: 从system_status的top输出中统计migration进程数量
+    if [[ -z "$cores" || "$cores" == "0" ]] && [[ -f "$system_status" ]]; then
+        cores=$(grep -c "migration/" "$system_status" 2>/dev/null || echo "")
+        cores=$(echo "$cores" | tr -d '\n\r\t ')
+    fi
+    
+    # 确保返回有效的数字
+    if [[ -z "$cores" || "$cores" == "0" || ! "$cores" =~ ^[0-9]+$ ]]; then
+        cores="4"
+    fi
+    
+    echo "$cores"
 }
 
 # 从system_info中提取总内存（KB）
 get_total_memory() {
     local memory_info="$DIAGNOSE_DIR/memory_info"
     if [[ -f "$memory_info" ]]; then
-        local mem_kb=$(grep -oP 'MemTotal:\s*\K\d+' "$memory_info" 2>/dev/null | head -1 || echo "0")
+        local mem_kb=$(grep -oP 'MemTotal:\s*\K\d+' "$memory_info" 2>/dev/null | head -1 | tr -d '\n\r' || echo "0")
         echo "$mem_kb"
     else
         echo "0"
@@ -319,7 +341,7 @@ get_load_average() {
     local system_status="$DIAGNOSE_DIR/system_status"
     if [[ -f "$system_status" ]]; then
         # 从uptime输出中提取负载
-        grep -oP 'load average:\s*\K[\d.]+,\s*[\d.]+,\s*[\d.]+' "$system_status" 2>/dev/null | head -1 || echo "0,0,0"
+        grep -oP 'load average:\s*\K[\d.]+,\s*[\d.]+,\s*[\d.]+' "$system_status" 2>/dev/null | head -1 | tr -d '\n\r' || echo "0,0,0"
     else
         echo "0,0,0"
     fi
@@ -329,7 +351,13 @@ get_load_average() {
 parse_load() {
     local load_str="$1"
     local pos="$2"
-    echo "$load_str" | awk -F',' -v p="$pos" '{gsub(/ /,"",$p); print $p}'
+    local result=$(echo "$load_str" | awk -F',' -v p="$pos" '{gsub(/ /,"",$p); print $p}')
+    # 确保返回有效数字，无效时返回0
+    if [[ "$result" =~ ^[0-9]+\.?[0-9]*$ ]]; then
+        echo "$result"
+    else
+        echo "0"
+    fi
 }
 
 # 从df输出中检查磁盘使用率
@@ -404,7 +432,15 @@ count_pattern_in_log() {
         return
     fi
     
-    grep -c "$pattern" "$log_file" 2>/dev/null || echo "0"
+    local count=$(grep -c "$pattern" "$log_file" 2>/dev/null || echo "0")
+    # 确保返回纯数字，移除所有非数字字符
+    count="${count//[^0-9]/}"
+    if [[ -z "$count" ]]; then
+        echo "0"
+    else
+        # 移除前导零
+        echo "$((count + 0))"
+    fi
 }
 
 # 检查文件中是否存在模式
@@ -419,7 +455,7 @@ pattern_exists() {
     grep -q "$pattern" "$file" 2>/dev/null
 }
 
-# 从网络信息中提取连接跟踪表信息
+# 从网络信息中提取连接追踪表信息
 get_conntrack_info() {
     local network_info="$DIAGNOSE_DIR/network_info"
     if [[ ! -f "$network_info" ]]; then
@@ -428,11 +464,19 @@ get_conntrack_info() {
     fi
     
     # 统计当前连接数
-    local current=$(grep -c '^ipv4' "$network_info" 2>/dev/null || echo "0")
+    local current=$(grep -c '^ipv4' "$network_info" 2>/dev/null | tr -d '\n\r' || echo "0")
+    current=$(echo "$current" | tr -d '\n\r\t ' | grep -o '[0-9]\+' | head -1)
+    if [[ -z "$current" ]]; then
+        current="0"
+    fi
     
     # 尝试从sysctl中获取最大值
     local system_info="$DIAGNOSE_DIR/system_info"
-    local max=$(grep 'net.netfilter.nf_conntrack_max' "$system_info" 2>/dev/null | awk '{print $NF}' | head -1 || echo "65536")
+    local max=$(grep 'net.netfilter.nf_conntrack_max' "$system_info" 2>/dev/null | awk '{print $NF}' | head -1 | tr -d '\n\r' || echo "65536")
+    max=$(echo "$max" | tr -d '\n\r\t ' | grep -o '[0-9]\+' | head -1)
+    if [[ -z "$max" ]]; then
+        max="65536"
+    fi
     
     echo "$current:$max"
 }
@@ -449,9 +493,19 @@ check_system_resources() {
     local load_avg=$(get_load_average)
     local cpu_cores=$(get_cpu_cores)
     local load_15min=$(parse_load "$load_avg" 3)
-    local load_threshold=$(awk "BEGIN {print $cpu_cores * 4}")
     
-    if (( $(awk "BEGIN {print ($load_15min > $load_threshold)}") )); then
+    # 确保cpu_cores有效
+    if [[ ! "$cpu_cores" =~ ^[0-9]+$ ]] || [[ "$cpu_cores" == "0" ]]; then
+        cpu_cores="4"
+    fi
+    # 确保load_15min有效
+    if [[ ! "$load_15min" =~ ^[0-9]+\.?[0-9]*$ ]]; then
+        load_15min="0"
+    fi
+    
+    local load_threshold=$(awk "BEGIN {print $cpu_cores * 4}" 2>/dev/null || echo "16")
+    
+    if (( $(awk "BEGIN {print ($load_15min > $load_threshold)}" 2>/dev/null || echo "0") )); then
         add_anomaly "$SEVERITY_CRITICAL" \
             "系统负载过高" \
             "HIGH_SYSTEM_LOAD" \
@@ -459,7 +513,7 @@ check_system_resources() {
             "system_status"
         log_check_fail "CPU负载: 过高 (15min负载: $load_15min, CPU核心: $cpu_cores)"
         log_suggestion "检查高CPU进程: top -c 或 ps aux --sort=-%cpu | head"
-    elif (( $(awk "BEGIN {print ($load_15min > $cpu_cores * 2)}") )); then
+    elif (( $(awk "BEGIN {print ($load_15min > $cpu_cores * 2)}" 2>/dev/null || echo "0") )); then
         add_anomaly "$SEVERITY_WARNING" \
             "系统负载偏高" \
             "ELEVATED_SYSTEM_LOAD" \
@@ -580,26 +634,36 @@ check_system_resources() {
         fi
     fi
     
-    # 6. 检查inode使用率
+    # 6. 检查inode使用率 (从df -i输出提取，Use%在倒数第二列)
     if [[ -f "$system_status" ]]; then
-        local high_inode=$(awk '/^-+run df/,/^-+End of df/' "$system_status" 2>/dev/null | \
+        # 尝试查找df -i的输出块
+        local high_inode=$(awk '/^-+run df -i/,/^-+End of df/' "$system_status" 2>/dev/null | \
             grep -E '^/' | \
-            awk '{gsub(/%/,"",$(NF-2)); if($(NF-2)+0 >= 90) print $(NF-2), $NF}')
+            awk '{gsub(/%/,"",$(NF-1)); if($(NF-1)+0 >= 90) print $(NF-1), $NF}')
+        
+        # 如果没有df -i，尝试从df -h提取磁盘使用率作为备选（Use%列）
+        if [[ -z "$high_inode" ]]; then
+            high_inode=$(awk '/^-+run df -h/,/^-+End of df/' "$system_status" 2>/dev/null | \
+                grep -E '^/dev/' | \
+                awk '{gsub(/%/,"",$(NF-1)); if($(NF-1)+0 >= 90) print $(NF-1), $NF}')
+        fi
         
         if [[ -n "$high_inode" ]]; then
             while IFS= read -r line; do
                 local usage=$(echo "$line" | awk '{print $1}')
                 local mount=$(echo "$line" | awk '{print $2}')
-                
-                add_anomaly "$SEVERITY_WARNING" \
-                    "Inode使用率过高" \
-                    "HIGH_INODE_USAGE" \
-                    "挂载点 $mount 的inode使用率 ${usage}%" \
-                    "system_status"
-                log_check_warn "Inode使用 [$mount]: 偏高 (使用率: ${usage}%)"
+                # 验证usage是纯数字
+                if [[ "$usage" =~ ^[0-9]+$ ]]; then
+                    add_anomaly "$SEVERITY_WARNING" \
+                        "磁盘/Inode使用率过高" \
+                        "HIGH_DISK_USAGE" \
+                        "挂载点 $mount 的使用率 ${usage}%" \
+                        "system_status"
+                    log_check_warn "磁盘使用 [$mount]: 偏高 (使用率: ${usage}%)"
+                fi
             done <<< "$high_inode"
         else
-            log_check_ok "Inode使用: 正常 (所有挂载点<90%)"
+            log_check_ok "磁盘使用: 正常 (所有挂载点<90%)"
         fi
     fi
 }
@@ -766,7 +830,8 @@ check_network() {
     local network_info="$DIAGNOSE_DIR/network_info"
     if [[ -f "$network_info" ]]; then
         local down_interfaces=$(awk '/state DOWN/{print $2}' "$network_info" 2>/dev/null | \
-            grep -v '^lo' | grep -v '^veth' | sed 's/:$//')
+            grep -v '^lo' | grep -v '^veth' | sed 's/:$//' | \
+            sort -u | tr '\n' ',' | sed 's/,$//')
         
         if [[ -n "$down_interfaces" ]]; then
             add_anomaly "$SEVERITY_WARNING" \
