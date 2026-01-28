@@ -14,7 +14,7 @@ fi
 PROJECT_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 
 # 被测脚本路径
-KUDIG_SH="$PROJECT_ROOT/kudig.sh"
+KUDIG_SH="$PROJECT_ROOT/kudig"
 
 # 测试数据目录
 FIXTURES_DIR="$PROJECT_ROOT/tests/fixtures"
@@ -29,7 +29,7 @@ setup() {
     
     # 确保脚本存在且可执行
     if [ ! -f "$KUDIG_SH" ]; then
-        skip "kudig.sh not found at $KUDIG_SH"
+        skip "kudig not found at $KUDIG_SH"
     fi
     
     chmod +x "$KUDIG_SH"

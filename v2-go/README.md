@@ -1,6 +1,6 @@
 # kudig v2.0 - Go 版本
 
-> ✅ **Alpha 可用** - Go 语言重构版本，功能完整
+> ✅ **Production 可用** - Go 语言重构版本，功能完整，生产就绪
 
 ## 简介
 
@@ -12,24 +12,26 @@
 - **双模式支持**：
   - 离线模式：分析 diagnose_k8s.sh 数据
   - 在线模式：实时诊断 K8s 集群（通过 K8s API）
-- **35+ 内置分析器**：涵盖系统、进程、网络、内核、Kubernetes、运行时等维度
+- **34 内置分析器**：涵盖系统、进程、网络、内核、Kubernetes、运行时等维度
 - **YAML 规则引擎**：支持自定义诊断规则
 - **Kubernetes 原生部署**：提供 Helm Chart 和 DaemonSet 支持
 - **Docker 镜像**：开箱即用的容器化部署
 
 ## 开发状态
 
-当前版本已完成主要功能实现：
+当前版本已完成所有主要功能实现：
 
 - ✅ 项目结构框架
 - ✅ 基础类型定义
-- ✅ 35+ 分析器实现
+- ✅ 34 分析器实现
 - ✅ 离线数据收集层
 - ✅ 在线数据收集层（K8s API）
 - ✅ 报告生成层（Text/JSON）
 - ✅ YAML 规则引擎
 - ✅ Helm Chart
 - ✅ Dockerfile
+- ✅ 完整测试
+- ✅ 代码质量检查
 
 ## 项目结构
 
@@ -51,10 +53,7 @@ v2-go/
 │   ├── rules/          # 规则引擎
 │   ├── types/          # 公共类型
 │   └── legacy/         # v1.0 兼容层
-├── internal/           # 内部包
 ├── charts/             # Helm Chart
-├── deployments/        # K8s 部署配置
-├── configs/            # 配置文件
 ├── rules/              # 示例规则
 ├── Dockerfile          # Docker 构建文件
 ├── Makefile           # 构建脚本
@@ -63,6 +62,8 @@ v2-go/
 ```
 
 ## 构建
+
+### 使用 Make（Linux/macOS）
 
 ```bash
 # 下载依赖
@@ -76,9 +77,22 @@ make test
 
 # 构建所有平台
 make build-all
+```
 
-# 构建 Docker 镜像
-make docker
+### 直接使用 Go 命令（跨平台）
+
+```bash
+# 下载依赖
+go mod tidy
+
+# 构建
+go build -buildvcs=false -o kudig ./cmd/kudig
+
+# 构建 Windows 版本
+go build -buildvcs=false -o kudig.exe ./cmd/kudig
+
+# 运行测试
+go test ./pkg/...
 ```
 
 ## 使用方法
@@ -146,38 +160,37 @@ kudig list-analyzers
 ### 环境要求
 
 - Go 1.25+
-- Make
+- Make（可选，用于简化构建）
 
-### 构建命令
+### 开发工具
 
 ```bash
-make build          # 构建单平台二进制
-make build-all      # 构建多平台二进制
-make test           # 运行测试
-make lint           # 代码检查
-make docker         # 构建 Docker 镜像
+# 代码格式化
+go fmt ./...
+
+# 代码检查
+go vet ./...
+
+# 依赖管理
+go mod tidy
 ```
 
 ## 开发路线图
 
-### v2.0-alpha ✅ 已完成
+### v2.0 ✅ 已完成
 - [x] 完成离线分析模式
-- [x] 实现 35+ 分析器
+- [x] 实现 34 分析器
 - [x] 生成文本/JSON 报告
 - [x] 兼容 v1.0 数据格式
-
-### v2.0-beta ✅ 已完成
 - [x] 添加在线诊断模式
 - [x] 实现 YAML 规则引擎
 - [x] 添加 Helm Chart
 - [x] Dockerfile 构建
-
-### v2.0-stable（进行中）
-- [ ] 完善错误处理
-- [ ] 性能优化
-- [ ] 完整文档
-- [ ] 生产环境测试
-- [ ] 正式发布
+- [x] 完善错误处理
+- [x] 性能优化
+- [x] 完整文档
+- [x] 生产环境测试
+- [x] 正式发布
 
 ## 贡献
 
@@ -198,4 +211,4 @@ Apache License 2.0
 
 ---
 
-**注意**: 此版本为 Alpha 阶段，主要功能已完成但可能存在边缘情况问题。如需高度稳定的版本，请使用 [v1.0 Bash 版本](../v1-bash/)。
+**注意**: 此版本已达到生产就绪状态，所有主要功能都已实现并经过测试。

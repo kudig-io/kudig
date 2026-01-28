@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 ################################################################################
-# Quality Check Script for kudig.sh
+# Quality Check Script for kudig
 # 自定义代码质量检查规则
 #
 # Usage:
@@ -37,7 +37,7 @@ Options:
     --help       Show this help message
 
 Examples:
-    $0 kudig.sh
+    $0 kudig
     $0 --verbose *.sh
 EOF
     exit 0

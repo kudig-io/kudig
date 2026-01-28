@@ -1,8 +1,8 @@
-# kudig.sh 测试说明
+# kudig 测试说明
 
 ## 测试环境要求
 
-`kudig.sh` 是一个Bash脚本，需要在Linux环境或具有Bash环境的系统上运行。
+`kudig` 是一个Bash脚本，需要在Linux环境或具有Bash环境的系统上运行。
 
 ### 在Linux/Unix系统上测试
 
@@ -14,30 +14,30 @@ sudo ./diagnose_k8s.sh
 # 会生成类似 /tmp/diagnose_1702468800 的目录
 ```
 
-2. **运行kudig.sh**：
+2. **运行kudig**：
 ```bash
 # 添加执行权限
-chmod +x kudig.sh
+chmod +x kudig
 
 # 基本测试
-./kudig.sh /tmp/diagnose_1702468800
+./kudig /tmp/diagnose_1702468800
 
 # 详细模式测试（显示每一步检查项）
-./kudig.sh --verbose /tmp/diagnose_1702468800
+./kudig --verbose /tmp/diagnose_1702468800
 
 # JSON格式测试
-./kudig.sh --json /tmp/diagnose_1702468800
+./kudig --json /tmp/diagnose_1702468800
 
 # 保存到文件测试
-./kudig.sh -o report.txt /tmp/diagnose_1702468800
+./kudig -o report.txt /tmp/diagnose_1702468800
 
 # 组合测试
-./kudig.sh --verbose --json -o report.json /tmp/diagnose_1702468800
+./kudig --verbose --json -o report.json /tmp/diagnose_1702468800
 ```
 
 3. **验证退出码**：
 ```bash
-./kudig.sh /tmp/diagnose_1702468800
+./kudig /tmp/diagnose_1702468800
 echo "Exit code: $?"
 # 0 = 无异常
 # 1 = 有警告/提示
@@ -51,13 +51,13 @@ echo "Exit code: $?"
 ```bash
 # 在WSL中
 cd /mnt/c/Users/Allen/Documents/GitHub/kudig.sh
-chmod +x kudig.sh
+chmod +x kudig
 
 # 创建测试目录（模拟诊断数据）
 ./create_test_data.sh
 
 # 运行测试
-./kudig.sh ./test_diagnose_dir
+./kudig ./test_diagnose_dir
 ```
 
 ### 使用Git Bash测试
@@ -66,7 +66,7 @@ chmod +x kudig.sh
 
 ```bash
 cd /c/Users/Allen/Documents/GitHub/kudig.sh
-bash kudig.sh --help
+bash kudig --help
 ```
 
 ## 功能验证清单
@@ -97,7 +97,7 @@ bash kudig.sh --help
 
 ```
 ================================================================
-  kudig.sh v1.0.0 - Kubernetes节点诊断分析工具
+  kudig v1.0.0 - Kubernetes节点诊断分析工具
 ================================================================
 
 诊断目录: /tmp/diagnose_1702468800
@@ -123,7 +123,7 @@ bash kudig.sh --help
 
 ```
 ================================================================
-  kudig.sh v1.0.0 - Kubernetes节点诊断分析工具
+  kudig v1.0.0 - Kubernetes节点诊断分析工具
 ================================================================
 
 诊断目录: /tmp/diagnose_1702468800
@@ -179,11 +179,11 @@ bash kudig.sh --help
 ```bash
 #!/bin/bash
 
-echo "开始kudig.sh功能测试..."
+echo "开始kudig功能测试..."
 
 # 测试1: 帮助信息
 echo "测试1: 帮助信息"
-./kudig.sh --help
+./kudig --help
 if [ $? -eq 0 ]; then
     echo "✓ 帮助信息测试通过"
 else
@@ -192,7 +192,7 @@ fi
 
 # 测试2: 版本信息
 echo "测试2: 版本信息"
-./kudig.sh --version
+./kudig --version
 if [ $? -eq 0 ]; then
     echo "✓ 版本信息测试通过"
 else
@@ -202,12 +202,12 @@ fi
 # 测试3: 空目录测试
 echo "测试3: 空目录测试"
 mkdir -p /tmp/test_empty_diagnose
-./kudig.sh /tmp/test_empty_diagnose
+./kudig /tmp/test_empty_diagnose
 rm -rf /tmp/test_empty_diagnose
 
 # 测试4: JSON输出格式
 echo "测试4: JSON输出格式"
-./kudig.sh --json /tmp/diagnose_* | python -m json.tool > /dev/null
+./kudig --json /tmp/diagnose_* | python -m json.tool > /dev/null
 if [ $? -eq 0 ]; then
     echo "✓ JSON格式测试通过"
 else

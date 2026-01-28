@@ -69,7 +69,7 @@ jobs:
       - name: 运行自定义检查
         run: |
           chmod +x scripts/quality_check.sh
-          bash scripts/quality_check.sh --verbose kudig.sh
+          bash scripts/quality_check.sh --verbose kudig
       
       - name: 检查结果
         if: failure()
@@ -154,18 +154,18 @@ jobs:
       
       - name: 运行基本功能测试
         run: |
-          chmod +x kudig.sh
+          chmod +x kudig
           
           # 测试帮助信息
-          ./kudig.sh --help
+          ./kudig --help
           
           # 测试版本信息
-          ./kudig.sh --version
+          ./kudig --version
           
           # 测试诊断分析（如果有测试数据）
           if [ -d reference/diagnose_k8s/diagnose_1765626516 ]; then
-            ./kudig.sh reference/diagnose_k8s/diagnose_1765626516 || true
-            ./kudig.sh --json reference/diagnose_k8s/diagnose_1765626516 > /tmp/report.json || true
+            ./kudig reference/diagnose_k8s/diagnose_1765626516 || true
+            ./kudig --json reference/diagnose_k8s/diagnose_1765626516 > /tmp/report.json || true
           fi
       
       - name: 验证 JSON 输出
@@ -201,14 +201,14 @@ jobs:
       - name: 运行基本测试
         run: |
           bash --version
-          chmod +x kudig.sh
-          bash kudig.sh --help
-          bash kudig.sh --version
+          chmod +x kudig
+          bash kudig --help
+          bash kudig --version
       
       - name: 功能测试
         run: |
           if [ -d reference/diagnose_k8s/diagnose_1765626516 ]; then
-            bash kudig.sh reference/diagnose_k8s/diagnose_1765626516 || echo "Test completed with exit code $?"
+            bash kudig reference/diagnose_k8s/diagnose_1765626516 || echo "Test completed with exit code $?"
           fi
 
   quality-report:

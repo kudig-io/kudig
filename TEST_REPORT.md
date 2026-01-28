@@ -1,7 +1,7 @@
-# kudig.sh 全量测试和质量检查报告
+# kudig 全量测试和质量检查报告
 
 **生成时间**: 2026-01-15  
-**测试版本**: v1.0.0 (Bash) / v2.0.0 (Go)  
+**测试版本**: v1.2.0 (Bash) / v2.0.0 (Go)  
 **测试范围**: v1-bash/ 和 v2-go/ 目录
 
 ---
@@ -10,13 +10,13 @@
 
 ### 1.1 Bash 语法检查
 - ✅ **状态**: 通过
-- **命令**: `bash -n kudig.sh`
+- **命令**: `bash -n kudig`
 - **结果**: 无语法错误
 
 ### 1.2 版本信息
 - ✅ **状态**: 正常
-- **命令**: `./kudig.sh --version`
-- **输出**: `kudig.sh version 1.0.0`
+- **命令**: `./kudig --version`
+- **输出**: `kudig version 1.2.0`
 
 ---
 
@@ -149,7 +149,7 @@ fi
 ### 5.1 v1-bash/ 目录结构
 ```
 v1-bash/
-├── kudig.sh          ✅ 主脚本 (1562 行)
+├── kudig          ✅ 主脚本 (1562 行)
 ├── README.md         ✅ 完整文档 (176 行)
 ├── TESTING.md        ✅ 测试说明 (239 行)
 └── reference/        ✅ 示例诊断数据
@@ -178,7 +178,7 @@ v2-go/
 
 ### 5.3 根目录
 - ✅ `README.md` - 项目导航页 (明确版本区分)
-- ✅ `kudig.sh` - 向后兼容（与 v1-bash/kudig.sh 同步）
+- ✅ `kudig` - 向后兼容（与 v1-bash/kudig 同步）
 - ✅ `TESTING.md` - 原测试文档
 - ✅ `STRUCTURE.md` - 结构说明
 - ✅ `LICENSE` - Apache 2.0

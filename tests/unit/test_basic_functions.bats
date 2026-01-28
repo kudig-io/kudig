@@ -1,11 +1,11 @@
 #!/usr/bin/env bats
 
 # 基础功能测试
-# 测试 kudig.sh 的基本参数和输出
+# 测试 kudig 的基本参数和输出
 
 load ../test_helper
 
-@test "kudig.sh 文件存在且可执行" {
+@test "kudig 文件存在且可执行" {
     [ -f "$KUDIG_SH" ]
     [ -x "$KUDIG_SH" ]
 }
@@ -15,7 +15,7 @@ load ../test_helper
     
     [ "$status" -eq 0 ]
     [[ "$output" =~ "用法" ]]
-    [[ "$output" =~ "kudig.sh" ]]
+    [[ "$output" =~ "kudig" ]]
     [[ "$output" =~ "选项" ]]
 }
 
