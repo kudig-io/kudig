@@ -83,8 +83,8 @@ func (b *BaseAnalyzer) SupportsMode(mode types.DataMode) bool {
 	return false
 }
 
-// AnalyzerConfig holds configuration for analyzers
-type AnalyzerConfig struct {
+// Config holds configuration for analyzers.
+type Config struct {
 	// Enabled indicates if the analyzer is enabled
 	Enabled bool `json:"enabled" yaml:"enabled"`
 
@@ -95,8 +95,8 @@ type AnalyzerConfig struct {
 	ExtraConfig map[string]interface{} `json:"extra_config,omitempty" yaml:"extra_config,omitempty"`
 }
 
-// AnalyzerResult wraps the result of an analyzer execution
-type AnalyzerResult struct {
+// Result wraps the result of an analyzer execution.
+type Result struct {
 	// AnalyzerName is the name of the analyzer
 	AnalyzerName string `json:"analyzer_name" yaml:"analyzer_name"`
 

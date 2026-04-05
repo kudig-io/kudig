@@ -49,7 +49,11 @@ func (e *Engine) Evaluate(ctx context.Context, data *types.DiagnosticData) ([]ty
 }
 
 // EvaluateByCategory runs rules of a specific category
-func (e *Engine) EvaluateByCategory(ctx context.Context, category string, data *types.DiagnosticData) ([]types.Issue, error) {
+func (e *Engine) EvaluateByCategory(
+	ctx context.Context,
+	category string,
+	data *types.DiagnosticData,
+) ([]types.Issue, error) {
 	var issues []types.Issue
 
 	rules := e.loader.GetRulesByCategory(category)
@@ -75,12 +79,18 @@ func (e *Engine) EvaluateByCategory(ctx context.Context, category string, data *
 }
 
 // evaluateRule evaluates a single rule
-func (e *Engine) evaluateRule(rule Rule, data *types.DiagnosticData) (matched bool, details string, location string, err error) {
+func (e *Engine) evaluateRule(
+	rule Rule,
+	data *types.DiagnosticData,
+) (matched bool, details string, location string, err error) {
 	return e.evaluateCondition(rule.Condition, data)
 }
 
 // evaluateCondition evaluates a condition recursively
-func (e *Engine) evaluateCondition(cond Condition, data *types.DiagnosticData) (matched bool, details string, location string, err error) {
+func (e *Engine) evaluateCondition(
+	cond Condition,
+	data *types.DiagnosticData,
+) (matched bool, details string, location string, err error) {
 	switch cond.Type {
 	case "file_contains":
 		return e.evalFileContains(cond, data)

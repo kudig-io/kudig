@@ -7,7 +7,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -138,6 +141,93 @@ func (c *Collector) Collect(ctx context.Context, config *collector.Config) (*typ
 	return data, nil
 }
 
+// NodeResult contains the collected data and any error for a single node
+type NodeResult struct {
+	NodeName string
+	Data     *types.DiagnosticData
+	Error    error
+}
+
+// CollectAllNodesConcurrent collects diagnostic data from all nodes concurrently.
+// It returns a map of node names to their collected data.
+func (c *Collector) CollectAllNodesConcurrent(
+	ctx context.Context,
+	config *collector.Config,
+	progressFn func(current, total int, nodeName string),
+) ([]NodeResult, error) {
+	client, err := c.buildClient(config)
+	if err != nil {
+		return nil, err
+	}
+	c.client = client
+
+	// Get all nodes
+	nodes, err := c.client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list nodes: %w", err)
+	}
+
+	totalNodes := len(nodes.Items)
+	if totalNodes == 0 {
+		return nil, fmt.Errorf("no nodes found in cluster")
+	}
+
+	// Results channel
+	results := make([]NodeResult, 0, totalNodes)
+	var mu sync.Mutex
+
+	// Use errgroup for concurrent collection with limited concurrency
+	g, ctx := errgroup.WithContext(ctx)
+	semaphore := make(chan struct{}, 5) // Limit to 5 concurrent nodes
+
+	for i, node := range nodes.Items {
+		nodeName := node.Name
+		nodeIndex := i
+
+		g.Go(func() error {
+			semaphore <- struct{}{}        // Acquire
+			defer func() { <-semaphore }() // Release
+
+			// Report progress start
+			if progressFn != nil {
+				progressFn(nodeIndex+1, totalNodes, nodeName)
+			}
+
+			// Collect data for this node
+			nodeData := types.NewDiagnosticData(types.ModeOnline)
+			nodeData.K8sClient = client
+			nodeData.NodeName = nodeName
+
+			if err := c.collectNodeData(ctx, nodeName, nodeData); err != nil {
+				mu.Lock()
+				results = append(results, NodeResult{
+					NodeName: nodeName,
+					Data:     nil,
+					Error:    err,
+				})
+				mu.Unlock()
+				return nil // Don't fail the whole operation for one node
+			}
+
+			mu.Lock()
+			results = append(results, NodeResult{
+				NodeName: nodeName,
+				Data:     nodeData,
+				Error:    nil,
+			})
+			mu.Unlock()
+
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+
+	return results, nil
+}
+
 // collectNodeData collects data for a specific node
 func (c *Collector) collectNodeData(ctx context.Context, nodeName string, data *types.DiagnosticData) error {
 	node, err := c.client.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
@@ -214,7 +304,11 @@ func (c *Collector) collectAllNodesData(ctx context.Context, data *types.Diagnos
 }
 
 // collectClusterData collects cluster-wide information
-func (c *Collector) collectClusterData(ctx context.Context, config *collector.Config, data *types.DiagnosticData) error {
+func (c *Collector) collectClusterData(
+	ctx context.Context,
+	config *collector.Config,
+	data *types.DiagnosticData,
+) error {
 	// Get component statuses (deprecated in newer K8s but still useful)
 	componentStatuses, err := c.client.CoreV1().ComponentStatuses().List(ctx, metav1.ListOptions{})
 	if err == nil {
@@ -257,6 +351,9 @@ func (c *Collector) collectClusterData(ctx context.Context, config *collector.Co
 	if err == nil {
 		data.SetRawFile("k8s/daemonsets", []byte(daemonsets))
 	}
+
+	// Collect service mesh information
+	c.collectServiceMeshInfo(ctx, data)
 
 	return nil
 }
@@ -422,6 +519,117 @@ func (c *Collector) getDaemonSetStatus(ctx context.Context) (string, error) {
 	}
 
 	return sb.String(), nil
+}
+
+// collectServiceMeshInfo collects Istio and Linkerd information
+func (c *Collector) collectServiceMeshInfo(ctx context.Context, data *types.DiagnosticData) {
+	// Check for Istio
+	c.collectIstioInfo(ctx, data)
+
+	// Check for Linkerd
+	c.collectLinkerdInfo(ctx, data)
+}
+
+// collectIstioInfo collects Istio service mesh information
+func (c *Collector) collectIstioInfo(ctx context.Context, data *types.DiagnosticData) {
+	istioInfo := &types.IstioInfo{
+		InjectionEnabled: make(map[string]bool),
+	}
+
+	// Check if istio-system namespace exists
+	_, err := c.client.CoreV1().Namespaces().Get(ctx, "istio-system", metav1.GetOptions{})
+	if err != nil {
+		// Istio not installed
+		return
+	}
+
+	// Count istiod pods
+	istiodPods, err := c.client.CoreV1().Pods("istio-system").List(ctx, metav1.ListOptions{
+		LabelSelector: "app=istiod",
+	})
+	if err == nil {
+		istioInfo.IstiodPods = len(istiodPods.Items)
+		for _, pod := range istiodPods.Items {
+			if pod.Status.Phase == corev1.PodRunning {
+				for _, cond := range pod.Status.Conditions {
+					if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+						istioInfo.IstiodReady++
+						break
+					}
+				}
+			}
+		}
+	}
+
+	// Count ingress gateway pods
+	ingressPods, err := c.client.CoreV1().Pods("istio-system").List(ctx, metav1.ListOptions{
+		LabelSelector: "app=istio-ingressgateway",
+	})
+	if err == nil {
+		istioInfo.IngressPods = len(ingressPods.Items)
+		for _, pod := range ingressPods.Items {
+			if pod.Status.Phase == corev1.PodRunning {
+				for _, cond := range pod.Status.Conditions {
+					if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+						istioInfo.IngressReady++
+						break
+					}
+				}
+			}
+		}
+	}
+
+	// Count egress gateway pods
+	egressPods, err := c.client.CoreV1().Pods("istio-system").List(ctx, metav1.ListOptions{
+		LabelSelector: "app=istio-egressgateway",
+	})
+	if err == nil {
+		istioInfo.EgressPods = len(egressPods.Items)
+		for _, pod := range egressPods.Items {
+			if pod.Status.Phase == corev1.PodRunning {
+				for _, cond := range pod.Status.Conditions {
+					if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+						istioInfo.EgressReady++
+						break
+					}
+				}
+			}
+		}
+	}
+
+	data.IstioInfo = istioInfo
+}
+
+// collectLinkerdInfo collects Linkerd service mesh information
+func (c *Collector) collectLinkerdInfo(ctx context.Context, data *types.DiagnosticData) {
+	linkerdInfo := &types.LinkerdInfo{}
+
+	// Check if linkerd namespace exists
+	_, err := c.client.CoreV1().Namespaces().Get(ctx, "linkerd", metav1.GetOptions{})
+	if err != nil {
+		// Linkerd not installed
+		return
+	}
+
+	// Count control plane pods
+	controlPlanePods, err := c.client.CoreV1().Pods("linkerd").List(ctx, metav1.ListOptions{
+		LabelSelector: "linkerd.io/control-plane-component",
+	})
+	if err == nil {
+		linkerdInfo.ControlPlanePods = len(controlPlanePods.Items)
+		for _, pod := range controlPlanePods.Items {
+			if pod.Status.Phase == corev1.PodRunning {
+				for _, cond := range pod.Status.Conditions {
+					if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+						linkerdInfo.ControlPlaneReady++
+						break
+					}
+				}
+			}
+		}
+	}
+
+	data.LinkerdInfo = linkerdInfo
 }
 
 // homeDir returns the user's home directory

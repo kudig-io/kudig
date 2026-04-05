@@ -132,10 +132,22 @@ jobs:
             bats tests/unit/placeholder.bats
           fi
       
-      - name: 测试覆盖率统计
+      - name: 生成测试覆盖率报告
         if: success()
         run: |
-          echo "::notice::Test coverage will be implemented in future iterations"
+          cd v2-go
+          go test -buildvcs=false ./pkg/... -coverprofile=coverage.out
+          go tool cover -func=coverage.out
+      
+      - name: 上传覆盖率到 Codecov
+        if: success()
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./v2-go/coverage.out
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: false
+          verbose: true
 
   integration-test:
     name: 集成测试
@@ -281,3 +293,115 @@ jobs:
         run: |
           echo "::error::Some quality checks failed"
           exit 1
+
+  # 新增: Trivy 容器镜像安全扫描
+  trivy-scan:
+    name: Trivy 镜像安全扫描
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+      
+      - name: 构建测试镜像
+        run: |
+          cd v2-go
+          docker build -t kudig:test .
+      
+      - name: Trivy 镜像扫描
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'kudig:test'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'  # 不阻断构建，仅报告
+      
+      - name: 上传扫描结果
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+      
+      - name: 显示扫描摘要
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'kudig:test'
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+
+  # 新增: gitleaks 密钥泄露扫描
+  gitleaks:
+    name: Secret 泄露检测
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 需要完整历史记录
+      
+      - name: Gitleaks 扫描
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}  # 可选：商业版许可
+        continue-on-error: true  # 先收集结果，不阻断
+      
+      - name: 手动 Secret 扫描（备用）
+        if: failure()
+        run: |
+          echo "::warning::Gitleaks detected potential secrets. Review the findings above."
+          echo "If these are false positives, add them to .gitleaksignore"
+
+  # 新增: SBOM 生成
+  sbom-generation:
+    name: SBOM 生成
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+      
+      - name: 安装 Syft
+        uses: anchore/sbom-action/download-syft@v0
+      
+      - name: 生成 Go 模块 SBOM
+        run: |
+          cd v2-go
+          syft scan dir:. -o spdx-json=../sbom-go.spdx.json \
+            --source-name "kudig-go" \
+            --source-version "${{ github.sha }}"
+      
+      - name: 生成 项目 SBOM
+        run: |
+          syft scan dir:. -o spdx-json=sbom-project.spdx.json \
+            --source-name "kudig" \
+            --source-version "${{ github.sha }}"
+      
+      - name: 生成 CycloneDX 格式
+        run: |
+          cd v2-go
+          syft scan dir:. -o cyclonedx-json=../sbom-go.cyclonedx.json
+      
+      - name: 上传 SBOM 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-reports
+          path: |
+            sbom-*.spdx.json
+            sbom-*.cyclonedx.json
+          retention-days: 90
+      
+      - name: 显示 SBOM 摘要
+        run: |
+          echo "## SBOM 生成摘要" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| 格式 | 文件 |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|------|" >> $GITHUB_STEP_SUMMARY
+          echo "| SPDX (Go) | sbom-go.spdx.json |" >> $GITHUB_STEP_SUMMARY
+          echo "| SPDX (Project) | sbom-project.spdx.json |" >> $GITHUB_STEP_SUMMARY
+          echo "| CycloneDX | sbom-go.cyclonedx.json |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**提交**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY

@@ -93,25 +93,37 @@ func (r *Registry) ListByMode(mode types.DataMode) []Analyzer {
 }
 
 // ExecuteAll runs all registered analyzers and returns results
-func (r *Registry) ExecuteAll(ctx context.Context, data *types.DiagnosticData) ([]AnalyzerResult, error) {
+func (r *Registry) ExecuteAll(ctx context.Context, data *types.DiagnosticData) ([]Result, error) {
 	analyzers := r.ListByMode(data.Mode)
 	return r.executeAnalyzers(ctx, analyzers, data)
 }
 
 // ExecuteByCategory runs analyzers of a specific category
-func (r *Registry) ExecuteByCategory(ctx context.Context, category string, data *types.DiagnosticData) ([]AnalyzerResult, error) {
+func (r *Registry) ExecuteByCategory(
+	ctx context.Context,
+	category string,
+	data *types.DiagnosticData,
+) ([]Result, error) {
 	analyzers := r.ListByCategory(category)
 	return r.executeAnalyzers(ctx, analyzers, data)
 }
 
 // ExecuteByMode runs analyzers that support a specific mode
-func (r *Registry) ExecuteByMode(ctx context.Context, data *types.DiagnosticData, mode types.DataMode) ([]AnalyzerResult, error) {
+func (r *Registry) ExecuteByMode(
+	ctx context.Context,
+	data *types.DiagnosticData,
+	mode types.DataMode,
+) ([]Result, error) {
 	analyzers := r.ListByMode(mode)
 	return r.executeAnalyzers(ctx, analyzers, data)
 }
 
 // ExecuteByNames runs specific analyzers by name
-func (r *Registry) ExecuteByNames(ctx context.Context, names []string, data *types.DiagnosticData) ([]AnalyzerResult, error) {
+func (r *Registry) ExecuteByNames(
+	ctx context.Context,
+	names []string,
+	data *types.DiagnosticData,
+) ([]Result, error) {
 	r.mu.RLock()
 	var analyzers []Analyzer
 	for _, name := range names {
@@ -125,14 +137,18 @@ func (r *Registry) ExecuteByNames(ctx context.Context, names []string, data *typ
 }
 
 // executeAnalyzers runs a list of analyzers
-func (r *Registry) executeAnalyzers(ctx context.Context, analyzers []Analyzer, data *types.DiagnosticData) ([]AnalyzerResult, error) {
+func (r *Registry) executeAnalyzers(
+	ctx context.Context,
+	analyzers []Analyzer,
+	data *types.DiagnosticData,
+) ([]Result, error) {
 	// Sort by dependencies (topological sort)
 	sorted, err := r.sortByDependencies(analyzers)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve dependencies: %w", err)
 	}
 
-	results := make([]AnalyzerResult, 0, len(sorted))
+	results := make([]Result, 0, len(sorted))
 
 	for _, analyzer := range sorted {
 		select {
@@ -149,12 +165,12 @@ func (r *Registry) executeAnalyzers(ctx context.Context, analyzers []Analyzer, d
 }
 
 // executeOne runs a single analyzer
-func (r *Registry) executeOne(ctx context.Context, analyzer Analyzer, data *types.DiagnosticData) AnalyzerResult {
+func (r *Registry) executeOne(ctx context.Context, analyzer Analyzer, data *types.DiagnosticData) Result {
 	start := time.Now()
 
 	issues, err := analyzer.Analyze(ctx, data)
 
-	return AnalyzerResult{
+	return Result{
 		AnalyzerName: analyzer.Name(),
 		Issues:       issues,
 		Error:        err,
@@ -217,7 +233,7 @@ func Register(analyzer Analyzer) error {
 }
 
 // CollectIssues extracts all issues from analyzer results
-func CollectIssues(results []AnalyzerResult) []types.Issue {
+func CollectIssues(results []Result) []types.Issue {
 	var issues []types.Issue
 	for _, r := range results {
 		if r.Error == nil && len(r.Issues) > 0 {

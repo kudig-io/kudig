@@ -10,12 +10,12 @@ import (
 	"github.com/kudig/kudig/pkg/types"
 )
 
-// PanicAnalyzer checks for kernel panic events
+// PanicAnalyzer checks for kernel panic events.
 type PanicAnalyzer struct {
 	*analyzer.BaseAnalyzer
 }
 
-// NewPanicAnalyzer creates a new kernel panic analyzer
+// NewPanicAnalyzer creates a new kernel panic analyzer.
 func NewPanicAnalyzer() *PanicAnalyzer {
 	return &PanicAnalyzer{
 		BaseAnalyzer: analyzer.NewBaseAnalyzer(
@@ -27,8 +27,8 @@ func NewPanicAnalyzer() *PanicAnalyzer {
 	}
 }
 
-// Analyze performs kernel panic analysis
-func (a *PanicAnalyzer) Analyze(ctx context.Context, data *types.DiagnosticData) ([]types.Issue, error) {
+// Analyze performs kernel panic analysis.
+func (a *PanicAnalyzer) Analyze(_ context.Context, data *types.DiagnosticData) ([]types.Issue, error) {
 	var issues []types.Issue
 
 	// Check dmesg log
@@ -76,7 +76,7 @@ func NewOOMAnalyzer() *OOMAnalyzer {
 }
 
 // Analyze performs OOM killer analysis
-func (a *OOMAnalyzer) Analyze(ctx context.Context, data *types.DiagnosticData) ([]types.Issue, error) {
+func (a *OOMAnalyzer) Analyze(_ context.Context, data *types.DiagnosticData) ([]types.Issue, error) {
 	var issues []types.Issue
 
 	// Check multiple log sources
@@ -102,6 +102,7 @@ func (a *OOMAnalyzer) Analyze(ctx context.Context, data *types.DiagnosticData) (
 			).WithRemediation("检查被kill的进程: dmesg | grep -i oom; 考虑增加内存或限制Pod资源")
 			issue.AnalyzerName = a.Name()
 			issues = append(issues, *issue)
+
 			break // Only report once
 		}
 	}
@@ -127,7 +128,7 @@ func NewFilesystemAnalyzer() *FilesystemAnalyzer {
 }
 
 // Analyze performs filesystem analysis
-func (a *FilesystemAnalyzer) Analyze(ctx context.Context, data *types.DiagnosticData) ([]types.Issue, error) {
+func (a *FilesystemAnalyzer) Analyze(_ context.Context, data *types.DiagnosticData) ([]types.Issue, error) {
 	var issues []types.Issue
 
 	logFiles := []string{"logs/dmesg.log", "varlogmessage.log"}
@@ -265,11 +266,11 @@ func (a *NMIWatchdogAnalyzer) Analyze(ctx context.Context, data *types.Diagnosti
 	return issues, nil
 }
 
-// init registers all kernel analyzers
+// init registers all kernel analyzers.
 func init() {
-	analyzer.Register(NewPanicAnalyzer())
-	analyzer.Register(NewOOMAnalyzer())
-	analyzer.Register(NewFilesystemAnalyzer())
-	analyzer.Register(NewModuleAnalyzer())
-	analyzer.Register(NewNMIWatchdogAnalyzer())
+	_ = analyzer.Register(NewPanicAnalyzer())
+	_ = analyzer.Register(NewOOMAnalyzer())
+	_ = analyzer.Register(NewFilesystemAnalyzer())
+	_ = analyzer.Register(NewModuleAnalyzer())
+	_ = analyzer.Register(NewNMIWatchdogAnalyzer())
 }

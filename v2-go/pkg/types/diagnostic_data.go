@@ -67,6 +67,12 @@ type DiagnosticData struct {
 
 	// NodeName to focus on (online mode)
 	NodeName string `json:"node_name,omitempty" yaml:"node_name,omitempty"`
+
+	// IstioInfo contains Istio service mesh information (online mode)
+	IstioInfo *IstioInfo `json:"istio_info,omitempty" yaml:"istio_info,omitempty"`
+
+	// LinkerdInfo contains Linkerd service mesh information (online mode)
+	LinkerdInfo *LinkerdInfo `json:"linkerd_info,omitempty" yaml:"linkerd_info,omitempty"`
 }
 
 // NodeInfo contains basic node identification

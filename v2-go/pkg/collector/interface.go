@@ -76,25 +76,25 @@ func NewOnlineConfig(kubeconfig, nodeName string) *Config {
 	}
 }
 
-// CollectorFactory creates collectors based on mode
-type CollectorFactory struct {
+// Factory creates collectors based on mode.
+type Factory struct {
 	collectors map[types.DataMode]Collector
 }
 
-// NewCollectorFactory creates a new factory
-func NewCollectorFactory() *CollectorFactory {
-	return &CollectorFactory{
+// NewCollectorFactory creates a new factory.
+func NewCollectorFactory() *Factory {
+	return &Factory{
 		collectors: make(map[types.DataMode]Collector),
 	}
 }
 
 // Register adds a collector for a specific mode
-func (f *CollectorFactory) Register(collector Collector) {
+func (f *Factory) Register(collector Collector) {
 	f.collectors[collector.Mode()] = collector
 }
 
 // Get returns a collector for the specified mode
-func (f *CollectorFactory) Get(mode types.DataMode) (Collector, bool) {
+func (f *Factory) Get(mode types.DataMode) (Collector, bool) {
 	c, ok := f.collectors[mode]
 	return c, ok
 }

@@ -12,12 +12,12 @@ import (
 	"github.com/kudig/kudig/pkg/types"
 )
 
-// CPUAnalyzer checks CPU load conditions
+// CPUAnalyzer checks CPU load conditions.
 type CPUAnalyzer struct {
 	*analyzer.BaseAnalyzer
 }
 
-// NewCPUAnalyzer creates a new CPU analyzer
+// NewCPUAnalyzer creates a new CPU analyzer.
 func NewCPUAnalyzer() *CPUAnalyzer {
 	return &CPUAnalyzer{
 		BaseAnalyzer: analyzer.NewBaseAnalyzer(
@@ -29,8 +29,8 @@ func NewCPUAnalyzer() *CPUAnalyzer {
 	}
 }
 
-// Analyze performs CPU load analysis
-func (a *CPUAnalyzer) Analyze(ctx context.Context, data *types.DiagnosticData) ([]types.Issue, error) {
+// Analyze performs CPU load analysis.
+func (a *CPUAnalyzer) Analyze(_ context.Context, data *types.DiagnosticData) ([]types.Issue, error) {
 	var issues []types.Issue
 
 	if data.SystemMetrics == nil {
@@ -73,12 +73,12 @@ func (a *CPUAnalyzer) Analyze(ctx context.Context, data *types.DiagnosticData) (
 	return issues, nil
 }
 
-// MemoryAnalyzer checks memory usage conditions
+// MemoryAnalyzer checks memory usage conditions.
 type MemoryAnalyzer struct {
 	*analyzer.BaseAnalyzer
 }
 
-// NewMemoryAnalyzer creates a new memory analyzer
+// NewMemoryAnalyzer creates a new memory analyzer.
 func NewMemoryAnalyzer() *MemoryAnalyzer {
 	return &MemoryAnalyzer{
 		BaseAnalyzer: analyzer.NewBaseAnalyzer(
@@ -90,8 +90,8 @@ func NewMemoryAnalyzer() *MemoryAnalyzer {
 	}
 }
 
-// Analyze performs memory usage analysis
-func (a *MemoryAnalyzer) Analyze(ctx context.Context, data *types.DiagnosticData) ([]types.Issue, error) {
+// Analyze performs memory usage analysis.
+func (a *MemoryAnalyzer) Analyze(_ context.Context, data *types.DiagnosticData) ([]types.Issue, error) {
 	var issues []types.Issue
 
 	if data.SystemMetrics == nil {
@@ -132,12 +132,12 @@ func (a *MemoryAnalyzer) Analyze(ctx context.Context, data *types.DiagnosticData
 	return issues, nil
 }
 
-// DiskAnalyzer checks disk space conditions
+// DiskAnalyzer checks disk space conditions.
 type DiskAnalyzer struct {
 	*analyzer.BaseAnalyzer
 }
 
-// NewDiskAnalyzer creates a new disk analyzer
+// NewDiskAnalyzer creates a new disk analyzer.
 func NewDiskAnalyzer() *DiskAnalyzer {
 	return &DiskAnalyzer{
 		BaseAnalyzer: analyzer.NewBaseAnalyzer(
@@ -149,8 +149,8 @@ func NewDiskAnalyzer() *DiskAnalyzer {
 	}
 }
 
-// Analyze performs disk space analysis
-func (a *DiskAnalyzer) Analyze(ctx context.Context, data *types.DiagnosticData) ([]types.Issue, error) {
+// Analyze performs disk space analysis.
+func (a *DiskAnalyzer) Analyze(_ context.Context, data *types.DiagnosticData) ([]types.Issue, error) {
 	var issues []types.Issue
 
 	if data.SystemMetrics == nil {
@@ -391,13 +391,13 @@ func (a *ProcessStateAnalyzer) Analyze(ctx context.Context, data *types.Diagnost
 	return issues, nil
 }
 
-// init registers all system analyzers
+// init registers all system analyzers.
 func init() {
-	analyzer.Register(NewCPUAnalyzer())
-	analyzer.Register(NewMemoryAnalyzer())
-	analyzer.Register(NewDiskAnalyzer())
-	analyzer.Register(NewSwapAnalyzer())
-	analyzer.Register(NewConntrackAnalyzer())
-	analyzer.Register(NewFileHandleAnalyzer())
-	analyzer.Register(NewProcessStateAnalyzer())
+	_ = analyzer.Register(NewCPUAnalyzer())
+	_ = analyzer.Register(NewMemoryAnalyzer())
+	_ = analyzer.Register(NewDiskAnalyzer())
+	_ = analyzer.Register(NewSwapAnalyzer())
+	_ = analyzer.Register(NewConntrackAnalyzer())
+	_ = analyzer.Register(NewFileHandleAnalyzer())
+	_ = analyzer.Register(NewProcessStateAnalyzer())
 }

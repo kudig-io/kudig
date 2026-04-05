@@ -57,7 +57,11 @@ func FindScript() (string, error) {
 }
 
 // Execute runs kudig.sh and returns the parsed issues
-func (e *BashExecutor) Execute(ctx context.Context, diagnosePath string, verbose bool) ([]types.Issue, *BashReport, error) {
+func (e *BashExecutor) Execute(
+	ctx context.Context,
+	diagnosePath string,
+	verbose bool,
+) ([]types.Issue, *BashReport, error) {
 	// Build command arguments
 	args := []string{e.ScriptPath, "--json"}
 	if verbose {

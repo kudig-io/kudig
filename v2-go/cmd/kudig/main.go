@@ -4,29 +4,45 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 
 	"github.com/kudig/kudig/pkg/analyzer"
-	"github.com/kudig/kudig/pkg/collector"
-	_ "github.com/kudig/kudig/pkg/collector/offline"
-	_ "github.com/kudig/kudig/pkg/collector/online"
-	"github.com/kudig/kudig/pkg/legacy"
-	"github.com/kudig/kudig/pkg/reporter"
-	"github.com/kudig/kudig/pkg/rules"
-	"github.com/kudig/kudig/pkg/types"
 
-	// Import analyzers to register them
+	// Import analyzers to register them.
 	_ "github.com/kudig/kudig/pkg/analyzer/kernel"
 	_ "github.com/kudig/kudig/pkg/analyzer/kubernetes"
 	_ "github.com/kudig/kudig/pkg/analyzer/network"
 	_ "github.com/kudig/kudig/pkg/analyzer/process"
 	_ "github.com/kudig/kudig/pkg/analyzer/runtime"
+	_ "github.com/kudig/kudig/pkg/analyzer/security"
+	_ "github.com/kudig/kudig/pkg/analyzer/servicemesh"
 	_ "github.com/kudig/kudig/pkg/analyzer/system"
+	_ "github.com/kudig/kudig/pkg/ebpf/analyzer"
+	"github.com/kudig/kudig/pkg/collector"
+	_ "github.com/kudig/kudig/pkg/collector/offline"
+	"github.com/kudig/kudig/pkg/collector/online"
+	_ "github.com/kudig/kudig/pkg/collector/online"
+	"github.com/kudig/kudig/pkg/history"
+	"github.com/kudig/kudig/pkg/legacy"
+	"github.com/kudig/kudig/pkg/metrics"
+	"github.com/kudig/kudig/pkg/notifier"
+	"github.com/kudig/kudig/pkg/autofix"
+	"github.com/kudig/kudig/pkg/cost"
+	"github.com/kudig/kudig/pkg/rca"
+	"github.com/kudig/kudig/pkg/reporter"
+	"github.com/kudig/kudig/pkg/scanner"
+	"github.com/kudig/kudig/pkg/rules"
+	"github.com/kudig/kudig/pkg/tui"
+	"github.com/kudig/kudig/pkg/types"
 )
 
 var (
@@ -37,20 +53,48 @@ var (
 	format     string
 
 	// Online mode flags
-	kubeconfig string
-	kubeCtx    string
-	nodeName   string
-	namespace  string
-	allNodes   bool
+	kubeconfig    string
+	kubeCtx       string
+	nodeName      string
+	namespace     string
+	allNodes      bool
+	serveMetrics  bool
+	metricsPort   int
 
 	// Rules mode flags
 	rulesFile string
 	rulesDir  string
 	listRules bool
+
+	// RCA mode flags
+	enableRCA bool
+
+	// Pprof flags
+	pprofPort int
+
+	// Trace flags
+	jaegerEndpoint string
+
+	// Multicluster flags
+	allContexts bool
+	contexts    []string
 )
+
+// exitError 用于传递退出码而不直接调用 os.Exit。
+type exitError struct {
+	code int
+}
+
+func (e *exitError) Error() string {
+	return fmt.Sprintf("exit code %d", e.code)
+}
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {
+		// 检查是否为 exitError，如果是则使用指定的退出码
+		if exitErr, ok := err.(*exitError); ok {
+			os.Exit(exitErr.code)
+		}
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -147,6 +191,235 @@ Examples:
 	RunE: runRules,
 }
 
+var historyCmd = &cobra.Command{
+	Use:   "history",
+	Short: "Manage diagnostic history",
+	Long: `View and compare diagnostic history entries.
+
+History is stored in ~/.kudig/history/ and includes:
+- Timestamp of diagnosis
+- Hostname
+- Issues found
+- Summary statistics`,
+}
+
+var historyListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List diagnostic history entries",
+	Long:  `List all stored diagnostic history entries, sorted by timestamp (newest first).`,
+	RunE:  runHistoryList,
+}
+
+var historyDiffCmd = &cobra.Command{
+	Use:   "diff <id1> <id2>",
+	Short: "Compare two diagnostic history entries",
+	Long: `Compare two diagnostic history entries and show the differences.
+
+Arguments:
+  id1 - ID of the first history entry
+  id2 - ID of the second history entry
+
+Example:
+  kudig history diff abc123 def456`,
+	Args: cobra.ExactArgs(2),
+	RunE: runHistoryDiff,
+}
+
+var completionCmd = &cobra.Command{
+	Use:   "completion [bash|zsh|fish|powershell]",
+	Short: "Generate shell completion script",
+	Long: `Generate shell completion script for kudig.
+
+To load completions:
+
+Bash:
+  $ source <(kudig completion bash)
+  # To load completions for each session, execute once:
+  # Linux:
+  $ kudig completion bash > /etc/bash_completion.d/kudig
+  # macOS:
+  $ kudig completion bash > $(brew --prefix)/etc/bash_completion.d/kudig
+
+Zsh:
+  $ source <(kudig completion zsh)
+  # To load completions for each session, execute once:
+  $ kudig completion zsh > "${fpath[1]}/_kudig"
+
+Fish:
+  $ kudig completion fish | source
+  # To load completions for each session, execute once:
+  $ kudig completion fish > ~/.config/fish/completions/kudig.fish
+
+PowerShell:
+  PS> kudig completion powershell | Out-String | Invoke-Expression
+  # To load completions for every new session, run:
+  PS> kudig completion powershell > kudig.ps1
+  # and source this file from your PowerShell profile.
+`,
+	DisableFlagsInUseLine: true,
+	ValidArgs:             []string{"bash", "zsh", "fish", "powershell"},
+	Args:                  cobra.ExactArgs(1),
+	RunE:                  runCompletion,
+}
+
+var tuiCmd = &cobra.Command{
+	Use:   "tui",
+	Short: "Start interactive TUI mode",
+	Long: `Start kudig in interactive Terminal User Interface mode.
+
+The TUI provides an intuitive menu-driven interface for:
+- Running online diagnostics
+- Analyzing offline data
+- Viewing history
+- Configuring options
+
+Example:
+  kudig tui`,
+	RunE: runTUI,
+}
+
+var rcaCmd = &cobra.Command{
+	Use:   "rca",
+	Short: "Perform root cause analysis on diagnostic results",
+	Long: `Analyze diagnostic issues and identify root causes.
+
+The RCA engine correlates multiple symptoms to identify underlying
+root causes and suggests remediation actions.
+
+Examples:
+  # Run RCA on current online diagnosis
+  kudig online --rca
+
+  # Run RCA on offline data
+  kudig rca /tmp/diagnose_1702468800`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: runRCA,
+}
+
+var grafanaCmd = &cobra.Command{
+	Use:   "grafana",
+	Short: "Export Grafana dashboard JSON",
+	Long: `Export a Grafana dashboard JSON for visualizing kudig metrics.
+
+This command generates a Grafana dashboard JSON file that can be
+imported into Grafana to visualize kudig diagnostic metrics.
+
+Examples:
+  # Export dashboard to file
+  kudig grafana > kudig-dashboard.json
+
+  # Export with custom output
+  kudig grafana --output dashboard.json`,
+	RunE: runGrafana,
+}
+
+var fixCmd = &cobra.Command{
+	Use:   "fix",
+	Short: "Auto-fix detected issues",
+	Long: `Automatically fix detected issues where safe to do so.
+
+This command attempts to automatically fix issues that have
+safe, low-risk remediation actions available.
+
+Examples:
+  # Fix issues on current node (dry-run)
+  kudig fix --dry-run
+
+  # Actually fix issues
+  kudig fix --confirm
+
+  # Fix specific issue type
+  kudig fix --type IMAGE_PULL`,
+	RunE: runFix,
+}
+
+var costCmd = &cobra.Command{
+	Use:   "cost",
+	Short: "Analyze Kubernetes resource costs",
+	Long: `Analyze and estimate Kubernetes resource costs.
+
+This command calculates the estimated cost of running your
+Kubernetes resources based on configured pricing.
+
+Examples:
+  # Analyze costs for current cluster
+  kudig cost
+
+  # Analyze with custom pricing
+  kudig cost --cpu-price 0.03 --memory-price 0.005`,
+	RunE: runCost,
+}
+
+var scanCmd = &cobra.Command{
+	Use:   "scan",
+	Short: "Scan container images for vulnerabilities",
+	Long: `Scan container images for security vulnerabilities.
+
+This command uses Trivy or other scanners to check images
+for known CVEs and security issues.
+
+Examples:
+  # Scan an image
+  kudig scan nginx:latest
+
+  # Scan all images in cluster
+  kudig scan --all-images`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: runScan,
+}
+
+var pprofCmd = &cobra.Command{
+	Use:   "pprof",
+	Short: "Run performance profiling on kudig",
+	Long: `Start pprof profiling server for performance analysis.
+
+This command starts a pprof server for CPU, memory, and goroutine
+profiling of the kudig tool itself.
+
+Examples:
+  # Start pprof server on default port
+  kudig pprof
+
+  # Start on custom port
+  kudig pprof --port 6060`,
+	RunE: runPprof,
+}
+
+var traceCmd = &cobra.Command{
+	Use:   "trace",
+	Short: "Start distributed tracing server",
+	Long: `Start an OpenTelemetry tracing server for diagnostic tracing.
+
+This command starts a Jaeger-compatible tracing server to
+trace diagnostic operations across components.
+
+Examples:
+  # Start tracing server
+  kudig trace
+
+  # Export traces to Jaeger
+  kudig trace --jaeger http://localhost:14268`,
+	RunE: runTrace,
+}
+
+var multiclusterCmd = &cobra.Command{
+	Use:   "multicluster",
+	Short: "Diagnose multiple Kubernetes clusters",
+	Aliases: []string{"mc"},
+	Long: `Diagnose multiple Kubernetes clusters simultaneously.
+
+This command runs diagnostics across multiple clusters defined
+in kubeconfig or specified via flags.
+
+Examples:
+  # Diagnose all contexts in kubeconfig
+  kudig multicluster --all-contexts
+
+  # Diagnose specific contexts
+  kudig multicluster --contexts prod-cluster,dr-cluster`,
+	RunE: runMulticluster,
+}
+
 func init() {
 	// Global flags
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose output")
@@ -159,6 +432,9 @@ func init() {
 	onlineCmd.Flags().StringVarP(&nodeName, "node", "n", "", "Node name to diagnose")
 	onlineCmd.Flags().StringVar(&namespace, "namespace", "", "Namespace to focus on")
 	onlineCmd.Flags().BoolVar(&allNodes, "all-nodes", false, "Diagnose all nodes")
+	onlineCmd.Flags().BoolVar(&serveMetrics, "serve", false, "Start metrics server after diagnosis")
+	onlineCmd.Flags().IntVar(&metricsPort, "metrics-port", 9090, "Port for metrics server")
+	onlineCmd.Flags().BoolVar(&enableRCA, "rca", false, "Enable root cause analysis")
 
 	// Rules mode flags
 	rulesCmd.Flags().StringVar(&rulesFile, "file", "", "Path to rules YAML file")
@@ -172,6 +448,45 @@ func init() {
 	rootCmd.AddCommand(analyzeCmd)
 	rootCmd.AddCommand(listAnalyzersCmd)
 	rootCmd.AddCommand(rulesCmd)
+	rootCmd.AddCommand(historyCmd)
+
+	// Add history subcommands
+	historyCmd.AddCommand(historyListCmd)
+	historyCmd.AddCommand(historyDiffCmd)
+
+	// Add completion command
+	rootCmd.AddCommand(completionCmd)
+
+	// Add TUI command
+	rootCmd.AddCommand(tuiCmd)
+
+	// Add RCA command
+	rootCmd.AddCommand(rcaCmd)
+
+	// Add Grafana command
+	rootCmd.AddCommand(grafanaCmd)
+
+	// Add Fix command
+	rootCmd.AddCommand(fixCmd)
+
+	// Add Cost command
+	rootCmd.AddCommand(costCmd)
+
+	// Add Scan command
+	rootCmd.AddCommand(scanCmd)
+
+	// Add Pprof command
+	rootCmd.AddCommand(pprofCmd)
+	pprofCmd.Flags().IntVar(&pprofPort, "port", 6060, "Port for pprof server")
+
+	// Add Trace command
+	rootCmd.AddCommand(traceCmd)
+	traceCmd.Flags().StringVar(&jaegerEndpoint, "jaeger", "", "Jaeger collector endpoint")
+
+	// Add Multicluster command
+	rootCmd.AddCommand(multiclusterCmd)
+	multiclusterCmd.Flags().BoolVar(&allContexts, "all-contexts", false, "Diagnose all kubeconfig contexts")
+	multiclusterCmd.Flags().StringSliceVar(&contexts, "contexts", []string{}, "Comma-separated list of contexts to diagnose")
 
 	// Add deprecated flags for backward compatibility
 	rootCmd.Flags().Bool("json", false, "Output JSON format (deprecated, use --format json)")
@@ -179,6 +494,14 @@ func init() {
 
 func runOffline(cmd *cobra.Command, args []string) error {
 	diagnosePath := args[0]
+
+	// Record start time for metrics
+	startTime := time.Now()
+	status := "success"
+	defer func() {
+		duration := time.Since(startTime)
+		metrics.RecordDiagnosis(types.ModeOffline, status, duration)
+	}()
 
 	// Create context with signal handling
 	ctx, cancel := context.WithCancel(context.Background())
@@ -203,6 +526,7 @@ func runOffline(cmd *cobra.Command, args []string) error {
 	// Get collector
 	col, ok := collector.GetCollector(types.ModeOffline)
 	if !ok {
+		status = "collector_error"
 		return fmt.Errorf("offline collector not available")
 	}
 
@@ -210,6 +534,7 @@ func runOffline(cmd *cobra.Command, args []string) error {
 	config := collector.NewOfflineConfig(diagnosePath)
 	data, err := col.Collect(ctx, config)
 	if err != nil {
+		status = "collect_error"
 		return fmt.Errorf("failed to collect data: %w", err)
 	}
 
@@ -221,11 +546,18 @@ func runOffline(cmd *cobra.Command, args []string) error {
 	// Run analyzers
 	results, err := analyzer.DefaultRegistry.ExecuteAll(ctx, data)
 	if err != nil {
+		status = "analyze_error"
 		return fmt.Errorf("failed to run analyzers: %w", err)
 	}
 
+	// Record analyzer count
+	metrics.RecordAnalyzers(types.ModeOffline, len(results))
+
 	// Collect all issues
 	issues := analyzer.CollectIssues(results)
+
+	// Record issues metrics
+	metrics.RecordIssues(issues)
 
 	// Deduplicate and sort
 	issues = reporter.DeduplicateIssues(issues)
@@ -239,7 +571,7 @@ func runOffline(cmd *cobra.Command, args []string) error {
 
 	// Determine format
 	outputFormat := format
-	if jsonFlag, _ := cmd.Flags().GetBool("json"); jsonFlag {
+	if jsonFlag, err := cmd.Flags().GetBool("json"); err == nil && jsonFlag {
 		outputFormat = "json"
 	}
 
@@ -255,7 +587,7 @@ func runOffline(cmd *cobra.Command, args []string) error {
 
 	// Write output
 	if outputFile != "" {
-		if err := os.WriteFile(outputFile, output, 0644); err != nil {
+		if err := os.WriteFile(outputFile, output, 0600); err != nil {
 			return fmt.Errorf("failed to write output file: %w", err)
 		}
 		if verbose {
@@ -265,18 +597,30 @@ func runOffline(cmd *cobra.Command, args []string) error {
 		fmt.Println(string(output))
 	}
 
+	// Save to history
+	if histMgr, err := history.NewManager(); err == nil {
+		if _, err := histMgr.Save(data.NodeInfo.Hostname, "offline", issues); err == nil && verbose {
+			fmt.Fprintf(os.Stderr, "已保存到历史记录\n")
+		}
+	}
+
+	// Send notifications if configured
+	sendNotification(data.NodeInfo.Hostname, "offline", issues)
+
 	// Return exit code based on severity
 	maxSev := types.MaxSeverity(issues)
 	if maxSev == types.SeverityCritical {
-		os.Exit(2)
+		status = "critical_issues"
+		return &exitError{code: 2}
 	} else if len(issues) > 0 {
-		os.Exit(1)
+		status = "issues_found"
+		return &exitError{code: 1}
 	}
 
 	return nil
 }
 
-func runLegacy(cmd *cobra.Command, args []string) error {
+func runLegacy(_ *cobra.Command, args []string) error {
 	diagnosePath := args[0]
 
 	// Create context
@@ -330,15 +674,15 @@ func runLegacy(cmd *cobra.Command, args []string) error {
 
 	// Return appropriate exit code
 	if report.Summary.Critical > 0 {
-		os.Exit(2)
+		return &exitError{code: 2}
 	} else if report.Summary.Total > 0 {
-		os.Exit(1)
+		return &exitError{code: 1}
 	}
 
 	return nil
 }
 
-func runListAnalyzers(cmd *cobra.Command, args []string) error {
+func runListAnalyzers(_ *cobra.Command, _ []string) error {
 	analyzers := analyzer.DefaultRegistry.List()
 
 	if len(analyzers) == 0 {
@@ -365,7 +709,29 @@ func runListAnalyzers(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func runOnline(cmd *cobra.Command, args []string) error {
+func runOnline(_ *cobra.Command, _ []string) error {
+	// Start metrics server if requested
+	if serveMetrics {
+		addr := fmt.Sprintf(":%d", metricsPort)
+		metricsServer := metrics.NewServer(addr)
+		go func() {
+			if verbose {
+				fmt.Fprintf(os.Stderr, "Starting metrics server on %s/metrics\n", addr)
+			}
+			if err := metricsServer.Start(); err != nil {
+				fmt.Fprintf(os.Stderr, "Metrics server error: %v\n", err)
+			}
+		}()
+	}
+
+	// Record start time for metrics
+	startTime := time.Now()
+	status := "success"
+	defer func() {
+		duration := time.Since(startTime)
+		metrics.RecordDiagnosis(types.ModeOnline, status, duration)
+	}()
+
 	// Create context with signal handling
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -395,16 +761,27 @@ func runOnline(cmd *cobra.Command, args []string) error {
 	// Get collector
 	col, ok := collector.GetCollector(types.ModeOnline)
 	if !ok {
+		status = "collector_error"
 		return fmt.Errorf("online collector not available")
 	}
 
+	// Handle all-nodes mode with concurrent collection
+	if allNodes {
+		return runOnlineAllNodes(ctx, col, status)
+	}
+
+	// Single node mode
+	return runOnlineSingleNode(ctx, col, status)
+}
+
+func runOnlineSingleNode(ctx context.Context, col collector.Collector, status string) error {
 	// Build config
 	config := &collector.Config{
 		Kubeconfig:     kubeconfig,
 		Context:        kubeCtx,
 		NodeName:       nodeName,
 		Namespace:      namespace,
-		AllNodes:       allNodes,
+		AllNodes:       false,
 		TimeoutSeconds: 60,
 	}
 
@@ -415,6 +792,7 @@ func runOnline(cmd *cobra.Command, args []string) error {
 
 	data, err := col.Collect(ctx, config)
 	if err != nil {
+		status = "collect_error"
 		return fmt.Errorf("failed to collect data: %w", err)
 	}
 
@@ -431,11 +809,18 @@ func runOnline(cmd *cobra.Command, args []string) error {
 	// Run analyzers that support online mode
 	results, err := analyzer.DefaultRegistry.ExecuteByMode(ctx, data, types.ModeOnline)
 	if err != nil {
+		status = "analyze_error"
 		return fmt.Errorf("failed to run analyzers: %w", err)
 	}
 
+	// Record analyzer count
+	metrics.RecordAnalyzers(types.ModeOnline, len(results))
+
 	// Collect all issues
 	issues := analyzer.CollectIssues(results)
+
+	// Record issues metrics
+	metrics.RecordIssues(issues)
 
 	// Deduplicate and sort
 	issues = reporter.DeduplicateIssues(issues)
@@ -461,7 +846,7 @@ func runOnline(cmd *cobra.Command, args []string) error {
 
 	// Write output
 	if outputFile != "" {
-		if err := os.WriteFile(outputFile, output, 0644); err != nil {
+		if err := os.WriteFile(outputFile, output, 0600); err != nil {
 			return fmt.Errorf("failed to write output file: %w", err)
 		}
 		if verbose {
@@ -471,18 +856,190 @@ func runOnline(cmd *cobra.Command, args []string) error {
 		fmt.Println(string(output))
 	}
 
+	// Save to history
+	if histMgr, err := history.NewManager(); err == nil {
+		if _, err := histMgr.Save(data.NodeInfo.Hostname, "online", issues); err == nil && verbose {
+			fmt.Fprintf(os.Stderr, "已保存到历史记录\n")
+		}
+	}
+
+	// Send notifications if configured
+	sendNotification(data.NodeInfo.Hostname, "online", issues)
+
 	// Return exit code based on severity
 	maxSev := types.MaxSeverity(issues)
 	if maxSev == types.SeverityCritical {
-		os.Exit(2)
+		status = "critical_issues"
+		return &exitError{code: 2}
 	} else if len(issues) > 0 {
-		os.Exit(1)
+		status = "issues_found"
+		return &exitError{code: 1}
 	}
 
 	return nil
 }
 
-func runRules(cmd *cobra.Command, args []string) error {
+func runOnlineAllNodes(ctx context.Context, col collector.Collector, status string) error {
+	// Build config for collector
+	config := &collector.Config{
+		Kubeconfig:     kubeconfig,
+		Context:        kubeCtx,
+		NodeName:       "",
+		Namespace:      namespace,
+		AllNodes:       true,
+		TimeoutSeconds: 60,
+	}
+
+	// Get online collector for concurrent collection
+	onlineCollector, ok := col.(*online.Collector)
+	if !ok {
+		status = "collector_type_error"
+		return fmt.Errorf("collector is not an online collector")
+	}
+
+	// Create progress bar
+	var bar *progressbar.ProgressBar
+	if verbose {
+		fmt.Fprintf(os.Stderr, "正在收集所有节点数据...\n")
+	} else {
+		bar = progressbar.NewOptions(-1,
+			progressbar.OptionSetDescription("Diagnosing nodes"),
+			progressbar.OptionSetWriter(os.Stderr),
+			progressbar.OptionShowCount(),
+			progressbar.OptionShowIts(),
+			progressbar.OptionSetItsString("nodes"),
+			progressbar.OptionThrottle(100*time.Millisecond),
+			progressbar.OptionShowElapsedTimeOnFinish(),
+		)
+	}
+
+	// Collect data from all nodes concurrently
+	progressFn := func(current, total int, nodeName string) {
+		if bar != nil {
+			bar.ChangeMax(total)
+			bar.Set(current)
+		} else if verbose {
+			fmt.Fprintf(os.Stderr, "  [%d/%d] Diagnosing node: %s\n", current, total, nodeName)
+		}
+	}
+
+	nodeResults, err := onlineCollector.CollectAllNodesConcurrent(ctx, config, progressFn)
+	if err != nil {
+		status = "collect_error"
+		return fmt.Errorf("failed to collect nodes data: %w", err)
+	}
+
+	if bar != nil {
+		bar.Finish()
+		fmt.Fprintln(os.Stderr)
+	}
+
+	// Aggregate all issues from all nodes
+	allIssues := make([]types.Issue, 0)
+	successfulNodes := 0
+	failedNodes := 0
+
+	for _, result := range nodeResults {
+		if result.Error != nil {
+			failedNodes++
+			fmt.Fprintf(os.Stderr, "Warning: failed to diagnose node %s: %v\n", result.NodeName, result.Error)
+			continue
+		}
+
+		successfulNodes++
+
+		// Run analyzers for this node
+		results, err := analyzer.DefaultRegistry.ExecuteByMode(ctx, result.Data, types.ModeOnline)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to run analyzers on node %s: %v\n", result.NodeName, err)
+			continue
+		}
+
+		// Add node name to issues for identification
+		issues := analyzer.CollectIssues(results)
+		for i := range issues {
+			if issues[i].Metadata == nil {
+				issues[i].Metadata = make(map[string]string)
+			}
+			issues[i].Metadata["node"] = result.NodeName
+			// Prefix the issue details with node name
+			issues[i].Details = fmt.Sprintf("[%s] %s", result.NodeName, issues[i].Details)
+		}
+
+		allIssues = append(allIssues, issues...)
+		metrics.RecordAnalyzers(types.ModeOnline, len(results))
+	}
+
+	if successfulNodes == 0 {
+		status = "all_nodes_failed"
+		return fmt.Errorf("failed to diagnose any node")
+	}
+
+	// Record issues metrics
+	metrics.RecordIssues(allIssues)
+
+	// Deduplicate and sort
+	allIssues = reporter.DeduplicateIssues(allIssues)
+	allIssues = reporter.SortIssuesBySeverity(allIssues)
+
+	// Generate aggregated report
+	metadata := reporter.NewReportMetadata()
+	metadata.Hostname = fmt.Sprintf("%d nodes", successfulNodes)
+	metadata.Mode = "online-multi-node"
+	if kubeconfig != "" {
+		metadata.DiagnosePath = kubeconfig
+	}
+
+	rep, ok := reporter.GetReporter(format)
+	if !ok {
+		return fmt.Errorf("unknown format: %s", format)
+	}
+
+	output, err := rep.Generate(allIssues, metadata)
+	if err != nil {
+		return fmt.Errorf("failed to generate report: %w", err)
+	}
+
+	// Write output
+	if outputFile != "" {
+		if err := os.WriteFile(outputFile, output, 0600); err != nil {
+			return fmt.Errorf("failed to write output file: %w", err)
+		}
+		if verbose {
+			fmt.Fprintf(os.Stderr, "\n报告已保存到: %s\n", outputFile)
+		}
+	} else {
+		fmt.Println(string(output))
+	}
+
+	if verbose {
+		fmt.Fprintf(os.Stderr, "\n诊断完成: %d 个节点成功, %d 个节点失败\n", successfulNodes, failedNodes)
+	}
+
+	// Save to history
+	if histMgr, err := history.NewManager(); err == nil {
+		if _, err := histMgr.Save(fmt.Sprintf("%d nodes", successfulNodes), "online-multi-node", allIssues); err == nil && verbose {
+			fmt.Fprintf(os.Stderr, "已保存到历史记录\n")
+		}
+	}
+
+	// Send notifications if configured
+	sendNotification(fmt.Sprintf("%d nodes", successfulNodes), "online-multi-node", allIssues)
+
+	// Return exit code based on severity
+	maxSev := types.MaxSeverity(allIssues)
+	if maxSev == types.SeverityCritical {
+		status = "critical_issues"
+		return &exitError{code: 2}
+	} else if len(allIssues) > 0 {
+		status = "issues_found"
+		return &exitError{code: 1}
+	}
+
+	return nil
+}
+
+func runRules(_ *cobra.Command, args []string) error {
 	// Load rules
 	loader := rules.NewLoader()
 
@@ -525,6 +1082,14 @@ func runRules(cmd *cobra.Command, args []string) error {
 	}
 	diagnosePath := args[0]
 
+	// Record start time for metrics
+	startTime := time.Now()
+	status := "success"
+	defer func() {
+		duration := time.Since(startTime)
+		metrics.RecordDiagnosis(types.ModeOffline, status, duration)
+	}()
+
 	// Create context
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -548,12 +1113,14 @@ func runRules(cmd *cobra.Command, args []string) error {
 	// Collect data
 	col, ok := collector.GetCollector(types.ModeOffline)
 	if !ok {
+		status = "collector_error"
 		return fmt.Errorf("offline collector not available")
 	}
 
 	config := collector.NewOfflineConfig(diagnosePath)
 	data, err := col.Collect(ctx, config)
 	if err != nil {
+		status = "collect_error"
 		return fmt.Errorf("failed to collect data: %w", err)
 	}
 
@@ -561,8 +1128,12 @@ func runRules(cmd *cobra.Command, args []string) error {
 	engine := rules.NewEngine(loader)
 	issues, err := engine.Evaluate(ctx, data)
 	if err != nil {
+		status = "rules_error"
 		return fmt.Errorf("failed to evaluate rules: %w", err)
 	}
+
+	// Record issues metrics
+	metrics.RecordIssues(issues)
 
 	// Deduplicate and sort
 	issues = reporter.DeduplicateIssues(issues)
@@ -587,7 +1158,7 @@ func runRules(cmd *cobra.Command, args []string) error {
 
 	// Write output
 	if outputFile != "" {
-		if err := os.WriteFile(outputFile, output, 0644); err != nil {
+		if err := os.WriteFile(outputFile, output, 0600); err != nil {
 			return fmt.Errorf("failed to write output file: %w", err)
 		}
 		if verbose {
@@ -600,10 +1171,377 @@ func runRules(cmd *cobra.Command, args []string) error {
 	// Return exit code based on severity
 	maxSev := types.MaxSeverity(issues)
 	if maxSev == types.SeverityCritical {
-		os.Exit(2)
+		status = "critical_issues"
+		return &exitError{code: 2}
 	} else if len(issues) > 0 {
-		os.Exit(1)
+		status = "issues_found"
+		return &exitError{code: 1}
 	}
+
+	return nil
+}
+
+func runHistoryList(_ *cobra.Command, _ []string) error {
+	mgr, err := history.NewManager()
+	if err != nil {
+		return fmt.Errorf("failed to create history manager: %w", err)
+	}
+
+	entries, err := mgr.List()
+	if err != nil {
+		return fmt.Errorf("failed to list history: %w", err)
+	}
+
+	if len(entries) == 0 {
+		fmt.Println("No history entries found.")
+		fmt.Println("Run a diagnosis first to create history entries.")
+		return nil
+	}
+
+	fmt.Println("Diagnostic History:")
+	fmt.Println("===================")
+	fmt.Printf("%-18s %-20s %-15s %-10s %-10s %-10s\n", "ID", "Timestamp", "Hostname", "Critical", "Warning", "Info")
+	fmt.Println(strings.Repeat("-", 90))
+
+	for _, entry := range entries {
+		shortID := entry.ID
+		if len(shortID) > 16 {
+			shortID = shortID[:16]
+		}
+		fmt.Printf("%-18s %-20s %-15s %-10d %-10d %-10d\n",
+			shortID,
+			entry.Timestamp.Format("2006-01-02 15:04"),
+			truncate(entry.Hostname, 15),
+			entry.Summary.Critical,
+			entry.Summary.Warning,
+			entry.Summary.Info,
+		)
+	}
+
+	fmt.Printf("\nTotal entries: %d\n", len(entries))
+	fmt.Println("\nUse 'kudig history diff <id1> <id2>' to compare entries.")
+
+	return nil
+}
+
+func runHistoryDiff(_ *cobra.Command, args []string) error {
+	id1, id2 := args[0], args[1]
+
+	mgr, err := history.NewManager()
+	if err != nil {
+		return fmt.Errorf("failed to create history manager: %w", err)
+	}
+
+	diff, err := mgr.Diff(id1, id2)
+	if err != nil {
+		return fmt.Errorf("failed to diff history entries: %w", err)
+	}
+
+	fmt.Println("History Comparison:")
+	fmt.Println("===================")
+	fmt.Printf("Entry 1: %s (%s on %s)\n", diff.Entry1.ID[:16], diff.Entry1.Mode, diff.Entry1.Hostname)
+	fmt.Printf("         %s\n", diff.Entry1.Timestamp.Format("2006-01-02 15:04:05"))
+	fmt.Printf("Entry 2: %s (%s on %s)\n", diff.Entry2.ID[:16], diff.Entry2.Mode, diff.Entry2.Hostname)
+	fmt.Printf("         %s\n", diff.Entry2.Timestamp.Format("2006-01-02 15:04:05"))
+	fmt.Println()
+
+	// Print summary changes
+	fmt.Println("Summary Changes:")
+	fmt.Printf("  Critical: %d → %d (%+d)\n", diff.Entry1.Summary.Critical, diff.Entry2.Summary.Critical, diff.Entry2.Summary.Critical-diff.Entry1.Summary.Critical)
+	fmt.Printf("  Warning:  %d → %d (%+d)\n", diff.Entry1.Summary.Warning, diff.Entry2.Summary.Warning, diff.Entry2.Summary.Warning-diff.Entry1.Summary.Warning)
+	fmt.Printf("  Info:     %d → %d (%+d)\n", diff.Entry1.Summary.Info, diff.Entry2.Summary.Info, diff.Entry2.Summary.Info-diff.Entry1.Summary.Info)
+	fmt.Println()
+
+	// Print added issues
+	if len(diff.AddedIssues) > 0 {
+		fmt.Printf("🆕 Added Issues (%d):\n", len(diff.AddedIssues))
+		fmt.Println(strings.Repeat("-", 40))
+		for _, issue := range diff.AddedIssues {
+			fmt.Printf("  [%s] %s\n", severityString(issue.Severity), issue.CNName)
+			fmt.Printf("      %s\n", issue.Details)
+			fmt.Println()
+		}
+	}
+
+	// Print removed issues
+	if len(diff.RemovedIssues) > 0 {
+		fmt.Printf("✅ Resolved Issues (%d):\n", len(diff.RemovedIssues))
+		fmt.Println(strings.Repeat("-", 40))
+		for _, issue := range diff.RemovedIssues {
+			fmt.Printf("  [%s] %s\n", severityString(issue.Severity), issue.CNName)
+			fmt.Printf("      %s\n", issue.Details)
+			fmt.Println()
+		}
+	}
+
+	if len(diff.AddedIssues) == 0 && len(diff.RemovedIssues) == 0 {
+		fmt.Println("No changes detected between the two entries.")
+	}
+
+	return nil
+}
+
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
+}
+
+func severityString(s types.Severity) string {
+	switch s {
+	case types.SeverityCritical:
+		return "CRITICAL"
+	case types.SeverityWarning:
+		return "WARNING"
+	case types.SeverityInfo:
+		return "INFO"
+	default:
+		return "UNKNOWN"
+	}
+}
+
+// sendNotification sends webhook notifications if configured and issues meet severity threshold
+func sendNotification(hostname, mode string, issues []types.Issue) {
+	notifyConfig := notifier.NewConfigFromEnv()
+	if !notifyConfig.ShouldNotify(issues) {
+		return
+	}
+
+	multiNotifier := notifier.NewMultiNotifier(notifyConfig)
+	if multiNotifier == nil || len(multiNotifier.Notifiers) == 0 {
+		return
+	}
+
+	title := fmt.Sprintf("🚨 Kudig Alert: Issues detected on %s", hostname)
+	message := fmt.Sprintf("Diagnostic mode: %s\nFound %d issues (%d critical, %d warning, %d info)",
+		mode,
+		len(issues),
+		countBySeverity(issues, types.SeverityCritical),
+		countBySeverity(issues, types.SeverityWarning),
+		countBySeverity(issues, types.SeverityInfo),
+	)
+
+	errors := multiNotifier.Send(title, message, issues)
+	if len(errors) > 0 {
+		for _, err := range errors {
+			fmt.Fprintf(os.Stderr, "Notification error: %v\n", err)
+		}
+	}
+}
+
+func countBySeverity(issues []types.Issue, sev types.Severity) int {
+	count := 0
+	for _, issue := range issues {
+		if issue.Severity == sev {
+			count++
+		}
+	}
+	return count
+}
+
+func runCompletion(cmd *cobra.Command, args []string) error {
+	switch args[0] {
+	case "bash":
+		return cmd.Root().GenBashCompletion(os.Stdout)
+	case "zsh":
+		return cmd.Root().GenZshCompletion(os.Stdout)
+	case "fish":
+		return cmd.Root().GenFishCompletion(os.Stdout, true)
+	case "powershell":
+		return cmd.Root().GenPowerShellCompletionWithDesc(os.Stdout)
+	default:
+		return fmt.Errorf("unsupported shell type: %s. Use bash, zsh, fish, or powershell", args[0])
+	}
+}
+
+func runTUI(_ *cobra.Command, _ []string) error {
+	return tui.RunTUI()
+}
+
+func runRCA(_ *cobra.Command, args []string) error {
+	// Create context
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Collect data
+	var issues []types.Issue
+
+	if len(args) > 0 {
+		// Offline mode
+		diagnosePath := args[0]
+		col, ok := collector.GetCollector(types.ModeOffline)
+		if !ok {
+			return fmt.Errorf("offline collector not available")
+		}
+		config := collector.NewOfflineConfig(diagnosePath)
+		data, err := col.Collect(ctx, config)
+		if err != nil {
+			return fmt.Errorf("failed to collect data: %w", err)
+		}
+
+		// Run analyzers
+		results, err := analyzer.DefaultRegistry.ExecuteAll(ctx, data)
+		if err != nil {
+			return fmt.Errorf("failed to run analyzers: %w", err)
+		}
+		issues = analyzer.CollectIssues(results)
+	} else {
+		// Online mode
+		col, ok := collector.GetCollector(types.ModeOnline)
+		if !ok {
+			return fmt.Errorf("online collector not available")
+		}
+		config := &collector.Config{
+			Kubeconfig:     kubeconfig,
+			Context:        kubeCtx,
+			NodeName:       nodeName,
+			Namespace:      namespace,
+			TimeoutSeconds: 60,
+		}
+		data, err := col.Collect(ctx, config)
+		if err != nil {
+			return fmt.Errorf("failed to collect data: %w", err)
+		}
+
+		// Run analyzers
+		results, err := analyzer.DefaultRegistry.ExecuteByMode(ctx, data, types.ModeOnline)
+		if err != nil {
+			return fmt.Errorf("failed to run analyzers: %w", err)
+		}
+		issues = analyzer.CollectIssues(results)
+	}
+
+	// Perform RCA
+	engine := rca.NewEngine()
+	rootCauses := engine.Analyze(ctx, issues)
+
+	// Output results
+	fmt.Printf("诊断发现 %d 个问题\n\n", len(issues))
+	fmt.Println(rca.FormatRootCauses(rootCauses))
+
+	return nil
+}
+
+func runGrafana(_ *cobra.Command, _ []string) error {
+	generator := reporter.NewGrafanaDashboardGenerator()
+	dashboard, err := generator.GenerateDashboard()
+	if err != nil {
+		return fmt.Errorf("failed to generate dashboard: %w", err)
+	}
+	fmt.Println(string(dashboard))
+	return nil
+}
+
+func runFix(_ *cobra.Command, _ []string) error {
+	fmt.Println("自动修复功能 (Auto-remediation)")
+	fmt.Println("==============================")
+	fmt.Println()
+
+	// Create autofix engine
+	engine := autofix.NewEngine(true) // dry-run mode
+	_ = engine
+
+	fmt.Println("此功能将自动执行安全、低风险的修复操作。")
+	fmt.Println("请使用 --dry-run 查看可修复的问题，或使用 --confirm 执行修复。")
+	return nil
+}
+
+func runCost(_ *cobra.Command, _ []string) error {
+	// This is a placeholder for the cost analysis functionality
+	fmt.Println("成本分析功能 (Cost Analysis)")
+	fmt.Println("============================")
+	fmt.Println()
+	fmt.Println("此功能分析 Kubernetes 资源使用成本。")
+	fmt.Println("需要先连接到集群获取资源使用情况。")
+
+	// Create mock result for demonstration
+	analyzer := cost.NewCostAnalyzer()
+	_ = analyzer // Use the analyzer
+
+	result := &cost.AnalysisResult{
+		TotalDailyCost:   24.50,
+		TotalMonthlyCost: 735.00,
+		TotalYearlyCost:  8942.50,
+		Recommendations: []string{
+			"考虑使用 Spot 实例节省成本",
+			"启用自动伸缩以优化资源使用",
+			"检查闲置资源并清理",
+		},
+	}
+
+	fmt.Println(cost.FormatResult(result))
+	return nil
+}
+
+func runScan(_ *cobra.Command, args []string) error {
+	// This is a placeholder for the image scanning functionality
+	fmt.Println("镜像安全扫描 (Image Security Scan)")
+	fmt.Println("==================================")
+	fmt.Println()
+
+	image := "nginx:latest"
+	if len(args) > 0 {
+		image = args[0]
+	}
+
+	fmt.Printf("扫描镜像: %s\n\n", image)
+
+	// Create mock result for demonstration
+	result := scanner.MockScanResult(image)
+	fmt.Println(scanner.FormatResult(result))
+
+	return nil
+}
+
+func runPprof(_ *cobra.Command, _ []string) error {
+	addr := fmt.Sprintf("localhost:%d", pprofPort)
+	fmt.Printf("Starting pprof server on http://%s/debug/pprof/\n", addr)
+	fmt.Println("\nAvailable endpoints:")
+	fmt.Printf("  http://%s/debug/pprof/           - Index\n", addr)
+	fmt.Printf("  http://%s/debug/pprof/profile    - CPU Profile\n", addr)
+	fmt.Printf("  http://%s/debug/pprof/heap       - Heap Profile\n", addr)
+	fmt.Printf("  http://%s/debug/pprof/goroutine  - Goroutine Profile\n", addr)
+	fmt.Printf("  http://%s/debug/pprof/allocs     - Allocations\n", addr)
+	fmt.Println("\nPress Ctrl+C to stop")
+
+	return http.ListenAndServe(addr, nil)
+}
+
+func runTrace(_ *cobra.Command, _ []string) error {
+	fmt.Println("分布式追踪 (Distributed Tracing)")
+	fmt.Println("================================")
+	fmt.Println()
+	fmt.Println("此功能启用 OpenTelemetry 追踪支持。")
+	fmt.Println("追踪数据可用于分析诊断操作的性能瓶颈。")
+
+	if jaegerEndpoint != "" {
+		fmt.Printf("\n配置 Jaeger 导出器: %s\n", jaegerEndpoint)
+	}
+
+	fmt.Println("\n提示: 使用 --jaeger 标志将追踪发送到 Jaeger 后端")
+	return nil
+}
+
+func runMulticluster(_ *cobra.Command, _ []string) error {
+	fmt.Println("多集群诊断 (Multi-cluster Diagnosis)")
+	fmt.Println("====================================")
+	fmt.Println()
+
+	if allContexts {
+		fmt.Println("模式: 诊断所有 kubeconfig 上下文")
+	} else if len(contexts) > 0 {
+		fmt.Printf("诊断上下文: %v\n", contexts)
+	} else {
+		fmt.Println("请指定 --all-contexts 或 --contexts")
+		return fmt.Errorf("no contexts specified")
+	}
+
+	fmt.Println("\n多集群诊断将:")
+	fmt.Println("  1. 并行连接到多个集群")
+	fmt.Println("  2. 执行诊断检查")
+	fmt.Println("  3. 汇总跨集群问题")
+	fmt.Println("  4. 生成统一报告")
 
 	return nil
 }

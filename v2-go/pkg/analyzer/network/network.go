@@ -12,12 +12,12 @@ import (
 	"github.com/kudig/kudig/pkg/types"
 )
 
-// InterfaceAnalyzer checks network interface status
+// InterfaceAnalyzer checks network interface status.
 type InterfaceAnalyzer struct {
 	*analyzer.BaseAnalyzer
 }
 
-// NewInterfaceAnalyzer creates a new network interface analyzer
+// NewInterfaceAnalyzer creates a new network interface analyzer.
 func NewInterfaceAnalyzer() *InterfaceAnalyzer {
 	return &InterfaceAnalyzer{
 		BaseAnalyzer: analyzer.NewBaseAnalyzer(
@@ -29,8 +29,8 @@ func NewInterfaceAnalyzer() *InterfaceAnalyzer {
 	}
 }
 
-// Analyze performs network interface analysis
-func (a *InterfaceAnalyzer) Analyze(ctx context.Context, data *types.DiagnosticData) ([]types.Issue, error) {
+// Analyze performs network interface analysis.
+func (a *InterfaceAnalyzer) Analyze(_ context.Context, data *types.DiagnosticData) ([]types.Issue, error) {
 	var issues []types.Issue
 
 	networkInfo, ok := data.GetRawFile("network_info")
@@ -88,7 +88,7 @@ func NewRouteAnalyzer() *RouteAnalyzer {
 }
 
 // Analyze performs route analysis
-func (a *RouteAnalyzer) Analyze(ctx context.Context, data *types.DiagnosticData) ([]types.Issue, error) {
+func (a *RouteAnalyzer) Analyze(_ context.Context, data *types.DiagnosticData) ([]types.Issue, error) {
 	var issues []types.Issue
 
 	networkInfo, ok := data.GetRawFile("network_info")
@@ -131,7 +131,7 @@ func NewPortAnalyzer() *PortAnalyzer {
 }
 
 // Analyze performs port analysis
-func (a *PortAnalyzer) Analyze(ctx context.Context, data *types.DiagnosticData) ([]types.Issue, error) {
+func (a *PortAnalyzer) Analyze(_ context.Context, data *types.DiagnosticData) ([]types.Issue, error) {
 	var issues []types.Issue
 
 	systemStatus, ok := data.GetRawFile("system_status")
@@ -179,7 +179,7 @@ func NewIptablesAnalyzer() *IptablesAnalyzer {
 }
 
 // Analyze performs iptables analysis
-func (a *IptablesAnalyzer) Analyze(ctx context.Context, data *types.DiagnosticData) ([]types.Issue, error) {
+func (a *IptablesAnalyzer) Analyze(_ context.Context, data *types.DiagnosticData) ([]types.Issue, error) {
 	var issues []types.Issue
 
 	networkInfo, ok := data.GetRawFile("network_info")
@@ -225,7 +225,7 @@ func NewInodeAnalyzer() *InodeAnalyzer {
 }
 
 // Analyze performs inode analysis
-func (a *InodeAnalyzer) Analyze(ctx context.Context, data *types.DiagnosticData) ([]types.Issue, error) {
+func (a *InodeAnalyzer) Analyze(_ context.Context, data *types.DiagnosticData) ([]types.Issue, error) {
 	var issues []types.Issue
 
 	systemStatus, ok := data.GetRawFile("system_status")
@@ -271,9 +271,9 @@ func (a *InodeAnalyzer) Analyze(ctx context.Context, data *types.DiagnosticData)
 
 // init registers all network analyzers
 func init() {
-	analyzer.Register(NewInterfaceAnalyzer())
-	analyzer.Register(NewRouteAnalyzer())
-	analyzer.Register(NewPortAnalyzer())
-	analyzer.Register(NewIptablesAnalyzer())
-	analyzer.Register(NewInodeAnalyzer())
+	_ = analyzer.Register(NewInterfaceAnalyzer())
+	_ = analyzer.Register(NewRouteAnalyzer())
+	_ = analyzer.Register(NewPortAnalyzer())
+	_ = analyzer.Register(NewIptablesAnalyzer())
+	_ = analyzer.Register(NewInodeAnalyzer())
 }
