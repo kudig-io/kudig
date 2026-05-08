@@ -24,7 +24,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 RUN mkdir -p /app/rules-out && cp /app/rules/*.yaml /app/rules-out/ 2>/dev/null || true
 
 # Runtime stage
-FROM alpine:3.19
+FROM alpine:3.23
 
 WORKDIR /app
 
