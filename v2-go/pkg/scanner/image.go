@@ -59,7 +59,7 @@ type ScanSummary struct {
 // ScanImage scans a container image for vulnerabilities
 func (s *ImageScanner) ScanImage(ctx context.Context, image string) (*ScanResult, error) {
 	// Check if trivy is available
-	if !s.isScannerAvailable() {
+	if !s.IsAvailable() {
 		return nil, fmt.Errorf("scanner not available: %s", s.ScannerType)
 	}
 
@@ -78,8 +78,8 @@ func (s *ImageScanner) ScanImage(ctx context.Context, image string) (*ScanResult
 	return s.parseTrivyOutput(image, output)
 }
 
-// isScannerAvailable checks if the scanner binary is available
-func (s *ImageScanner) isScannerAvailable() bool {
+// IsAvailable checks if the scanner binary is available
+func (s *ImageScanner) IsAvailable() bool {
 	_, err := exec.LookPath(s.ScannerType)
 	return err == nil
 }

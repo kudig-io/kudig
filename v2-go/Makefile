@@ -22,7 +22,7 @@ BUILD_DIR=./build
 .PHONY: all build clean test fmt vet lint deps tidy help
 
 # Default target
-all: deps fmt vet build
+all: deps fmt vet lint test build
 
 # Build the binary
 build:
@@ -37,6 +37,7 @@ build-all: build-linux build-darwin build-windows
 build-linux:
 	@echo "Building for Linux..."
 	GOOS=linux GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-linux-amd64 $(CMD_DIR)
+	GOOS=linux GOARCH=arm64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-linux-arm64 $(CMD_DIR)
 
 build-darwin:
 	@echo "Building for macOS..."
@@ -146,6 +147,17 @@ sbom:
 	syft scan dir:. -o spdx-json=sbom.spdx.json --source-name "kudig-go" --source-version "$(VERSION)"
 	syft scan dir:. -o cyclonedx-json=sbom.cyclonedx.json --source-name "kudig-go" --source-version "$(VERSION)"
 	@echo "SBOM generated: sbom.spdx.json, sbom.cyclonedx.json"
+
+# Docker build
+docker-build:
+	@echo "Building Docker image..."
+	docker build --build-arg VERSION=$(VERSION) --build-arg BUILD_TIME=$(BUILD_TIME) -t kudig/kudig:$(VERSION) -t kudig/kudig:latest .
+
+# Docker push
+docker-push: docker-build
+	@echo "Pushing Docker image..."
+	docker push kudig/kudig:$(VERSION)
+	docker push kudig/kudig:latest
 
 # Show help
 help:

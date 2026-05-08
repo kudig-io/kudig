@@ -5,7 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	_ "net/http/pprof"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"strings"
@@ -37,6 +37,7 @@ import (
 	"github.com/kudig/kudig/pkg/notifier"
 	"github.com/kudig/kudig/pkg/autofix"
 	"github.com/kudig/kudig/pkg/cost"
+	"github.com/kudig/kudig/pkg/ai"
 	"github.com/kudig/kudig/pkg/rca"
 	"github.com/kudig/kudig/pkg/reporter"
 	"github.com/kudig/kudig/pkg/scanner"
@@ -78,6 +79,9 @@ var (
 	// Multicluster flags
 	allContexts bool
 	contexts    []string
+
+	// AI flags
+	aiOnline bool
 )
 
 // exitError 用于传递退出码而不直接调用 os.Exit。
@@ -420,6 +424,23 @@ Examples:
 	RunE: runMulticluster,
 }
 
+var aiCmd = &cobra.Command{
+	Use:   "ai",
+	Short: "AI-assisted diagnostic analysis",
+	Long: `Use AI/LLM to analyze diagnostic results and provide insights.
+
+Requires one of: OpenAI API key, Qwen API key, or Ollama running locally.
+
+Examples:
+  # Analyze offline data with AI
+  kudig ai /tmp/diagnose_1702468800
+
+  # Analyze online cluster with AI
+  kudig ai --online`,
+	Args:  cobra.MaximumNArgs(1),
+	RunE:  runAI,
+}
+
 func init() {
 	// Global flags
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose output")
@@ -487,6 +508,10 @@ func init() {
 	rootCmd.AddCommand(multiclusterCmd)
 	multiclusterCmd.Flags().BoolVar(&allContexts, "all-contexts", false, "Diagnose all kubeconfig contexts")
 	multiclusterCmd.Flags().StringSliceVar(&contexts, "contexts", []string{}, "Comma-separated list of contexts to diagnose")
+
+	// Add AI command
+	rootCmd.AddCommand(aiCmd)
+	aiCmd.Flags().BoolVar(&aiOnline, "online", false, "Use online mode instead of offline path")
 
 	// Add deprecated flags for backward compatibility
 	rootCmd.Flags().Bool("json", false, "Output JSON format (deprecated, use --format json)")
@@ -1433,41 +1458,98 @@ func runGrafana(_ *cobra.Command, _ []string) error {
 	return nil
 }
 
-func runFix(_ *cobra.Command, _ []string) error {
-	fmt.Println("自动修复功能 (Auto-remediation)")
-	fmt.Println("==============================")
-	fmt.Println()
+func runFix(_ *cobra.Command, args []string) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	// Create autofix engine
-	engine := autofix.NewEngine(true) // dry-run mode
-	_ = engine
+	var issues []types.Issue
 
-	fmt.Println("此功能将自动执行安全、低风险的修复操作。")
-	fmt.Println("请使用 --dry-run 查看可修复的问题，或使用 --confirm 执行修复。")
+	if len(args) > 0 {
+		diagnosePath := args[0]
+		col, ok := collector.GetCollector(types.ModeOffline)
+		if !ok {
+			return fmt.Errorf("offline collector not available")
+		}
+		config := collector.NewOfflineConfig(diagnosePath)
+		data, err := col.Collect(ctx, config)
+		if err != nil {
+			return fmt.Errorf("failed to collect data: %w", err)
+		}
+		results, err := analyzer.DefaultRegistry.ExecuteAll(ctx, data)
+		if err != nil {
+			return fmt.Errorf("failed to run analyzers: %w", err)
+		}
+		issues = analyzer.CollectIssues(results)
+	} else {
+		col, ok := collector.GetCollector(types.ModeOnline)
+		if !ok {
+			return fmt.Errorf("online collector not available")
+		}
+		config := &collector.Config{
+			Kubeconfig:     kubeconfig,
+			Context:        kubeCtx,
+			NodeName:       nodeName,
+			Namespace:      namespace,
+			TimeoutSeconds: 60,
+		}
+		data, err := col.Collect(ctx, config)
+		if err != nil {
+			return fmt.Errorf("failed to collect data: %w", err)
+		}
+		results, err := analyzer.DefaultRegistry.ExecuteAll(ctx, data)
+		if err != nil {
+			return fmt.Errorf("failed to run analyzers: %w", err)
+		}
+		issues = analyzer.CollectIssues(results)
+	}
+
+	engine := autofix.NewEngine(true)
+
+	fixable := engine.GetFixableIssues(issues)
+	if len(fixable) == 0 {
+		fmt.Println("没有可自动修复的问题")
+		return nil
+	}
+
+	fmt.Printf("发现 %d 个可自动修复的问题（共 %d 个）:\n\n", len(fixable), len(issues))
+	for _, issue := range fixable {
+		action, _ := engine.CanFix(issue)
+		fmt.Printf("  [%s] %s\n", issue.ENName, issue.CNName)
+		fmt.Printf("    修复操作: %s (风险: %s)\n", action.Description, action.Risk)
+		fmt.Printf("    命令: %s\n\n", action.Command)
+	}
+
+	fmt.Println("以上为 dry-run 模式预览。使用 --confirm 执行实际修复。")
+	fmt.Println(autofix.FormatResults(engine.FixAll(ctx, fixable)))
 	return nil
 }
 
 func runCost(_ *cobra.Command, _ []string) error {
-	// This is a placeholder for the cost analysis functionality
-	fmt.Println("成本分析功能 (Cost Analysis)")
-	fmt.Println("============================")
-	fmt.Println()
-	fmt.Println("此功能分析 Kubernetes 资源使用成本。")
-	fmt.Println("需要先连接到集群获取资源使用情况。")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	// Create mock result for demonstration
-	analyzer := cost.NewCostAnalyzer()
-	_ = analyzer // Use the analyzer
+	col, ok := collector.GetCollector(types.ModeOnline)
+	if !ok {
+		return fmt.Errorf("online collector not available, cost analysis requires cluster access")
+	}
 
-	result := &cost.AnalysisResult{
-		TotalDailyCost:   24.50,
-		TotalMonthlyCost: 735.00,
-		TotalYearlyCost:  8942.50,
-		Recommendations: []string{
-			"考虑使用 Spot 实例节省成本",
-			"启用自动伸缩以优化资源使用",
-			"检查闲置资源并清理",
-		},
+	config := &collector.Config{
+		Kubeconfig:     kubeconfig,
+		Context:        kubeCtx,
+		NodeName:       nodeName,
+		Namespace:      namespace,
+		TimeoutSeconds: 60,
+	}
+
+	data, err := col.Collect(ctx, config)
+	if err != nil {
+		return fmt.Errorf("failed to collect data: %w", err)
+	}
+
+	a := cost.NewCostAnalyzer()
+	result, err := a.Analyze(ctx, data)
+	if err != nil {
+		return fmt.Errorf("failed to analyze costs: %w", err)
 	}
 
 	fmt.Println(cost.FormatResult(result))
@@ -1475,22 +1557,26 @@ func runCost(_ *cobra.Command, _ []string) error {
 }
 
 func runScan(_ *cobra.Command, args []string) error {
-	// This is a placeholder for the image scanning functionality
-	fmt.Println("镜像安全扫描 (Image Security Scan)")
-	fmt.Println("==================================")
-	fmt.Println()
-
 	image := "nginx:latest"
 	if len(args) > 0 {
 		image = args[0]
 	}
 
-	fmt.Printf("扫描镜像: %s\n\n", image)
+	s := scanner.NewImageScanner()
 
-	// Create mock result for demonstration
-	result := scanner.MockScanResult(image)
+	if !s.IsAvailable() {
+		return fmt.Errorf("scanner %q not found in PATH; install trivy first: https://trivy.dev", s.ScannerType)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	result, err := s.ScanImage(ctx, image)
+	if err != nil {
+		return fmt.Errorf("scan failed: %w", err)
+	}
+
 	fmt.Println(scanner.FormatResult(result))
-
 	return nil
 }
 
@@ -1505,43 +1591,112 @@ func runPprof(_ *cobra.Command, _ []string) error {
 	fmt.Printf("  http://%s/debug/pprof/allocs     - Allocations\n", addr)
 	fmt.Println("\nPress Ctrl+C to stop")
 
-	return http.ListenAndServe(addr, nil)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	return http.ListenAndServe(addr, mux)
 }
 
 func runTrace(_ *cobra.Command, _ []string) error {
-	fmt.Println("分布式追踪 (Distributed Tracing)")
-	fmt.Println("================================")
-	fmt.Println()
-	fmt.Println("此功能启用 OpenTelemetry 追踪支持。")
-	fmt.Println("追踪数据可用于分析诊断操作的性能瓶颈。")
-
-	if jaegerEndpoint != "" {
-		fmt.Printf("\n配置 Jaeger 导出器: %s\n", jaegerEndpoint)
-	}
-
-	fmt.Println("\n提示: 使用 --jaeger 标志将追踪发送到 Jaeger 后端")
-	return nil
+	return fmt.Errorf("trace 功能尚未实现 (experimental): OpenTelemetry 集成正在开发中")
 }
 
 func runMulticluster(_ *cobra.Command, _ []string) error {
-	fmt.Println("多集群诊断 (Multi-cluster Diagnosis)")
-	fmt.Println("====================================")
-	fmt.Println()
+	return fmt.Errorf("multicluster 功能尚未实现 (experimental): 多集群诊断正在开发中")
+}
 
-	if allContexts {
-		fmt.Println("模式: 诊断所有 kubeconfig 上下文")
-	} else if len(contexts) > 0 {
-		fmt.Printf("诊断上下文: %v\n", contexts)
-	} else {
-		fmt.Println("请指定 --all-contexts 或 --contexts")
-		return fmt.Errorf("no contexts specified")
+func runAI(_ *cobra.Command, args []string) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		cancel()
+	}()
+
+	config := ai.LoadConfig()
+	if config.APIKey == "" {
+		return fmt.Errorf("AI 功能需要配置 API Key。请设置环境变量 KUDIG_AI_API_KEY，或使用 Ollama 本地模式")
 	}
 
-	fmt.Println("\n多集群诊断将:")
-	fmt.Println("  1. 并行连接到多个集群")
-	fmt.Println("  2. 执行诊断检查")
-	fmt.Println("  3. 汇总跨集群问题")
-	fmt.Println("  4. 生成统一报告")
+	assistant, err := ai.NewAssistant(config)
+	if err != nil {
+		return fmt.Errorf("failed to create AI assistant: %w", err)
+	}
+
+	if !assistant.IsAvailable() {
+		return fmt.Errorf("AI provider not available (provider: %s)", config.Provider)
+	}
+
+	var issues []types.Issue
+
+	if aiOnline {
+		col, ok := collector.GetCollector(types.ModeOnline)
+		if !ok {
+			return fmt.Errorf("online collector not available")
+		}
+		colConfig := &collector.Config{
+			Kubeconfig:     kubeconfig,
+			Context:        kubeCtx,
+			NodeName:       nodeName,
+			Namespace:      namespace,
+			TimeoutSeconds: 60,
+		}
+		data, err := col.Collect(ctx, colConfig)
+		if err != nil {
+			return fmt.Errorf("failed to collect data: %w", err)
+		}
+		results, err := analyzer.DefaultRegistry.ExecuteAll(ctx, data)
+		if err != nil {
+			return fmt.Errorf("failed to run analyzers: %w", err)
+		}
+		issues = analyzer.CollectIssues(results)
+	} else if len(args) > 0 {
+		col, ok := collector.GetCollector(types.ModeOffline)
+		if !ok {
+			return fmt.Errorf("offline collector not available")
+		}
+		colConfig := collector.NewOfflineConfig(args[0])
+		data, err := col.Collect(ctx, colConfig)
+		if err != nil {
+			return fmt.Errorf("failed to collect data: %w", err)
+		}
+		results, err := analyzer.DefaultRegistry.ExecuteAll(ctx, data)
+		if err != nil {
+			return fmt.Errorf("failed to run analyzers: %w", err)
+		}
+		issues = analyzer.CollectIssues(results)
+	} else {
+		return fmt.Errorf("请指定离线诊断数据路径，或使用 --online 进行在线分析")
+	}
+
+	fmt.Printf("发现 %d 个问题，正在使用 AI 分析...\n\n", len(issues))
+
+	result, err := assistant.AnalyzeWithAI(ctx, issues, "")
+	if err != nil {
+		return fmt.Errorf("AI analysis failed: %w", err)
+	}
+
+	fmt.Printf("=== AI 分析结果 ===\n\n")
+	fmt.Printf("摘要: %s\n\n", result.Summary)
+	if result.RootCause != "" {
+		fmt.Printf("根因分析:\n%s\n\n", result.RootCause)
+	}
+	if len(result.Suggestions) > 0 {
+		fmt.Println("修复建议:")
+		for i, s := range result.Suggestions {
+			fmt.Printf("  %d. [%s] %s\n", i+1, s.Risk, s.Description)
+			if s.Command != "" {
+				fmt.Printf("     命令: %s\n", s.Command)
+			}
+		}
+	}
+	fmt.Printf("\n置信度: %.0f%%\n", result.Confidence*100)
 
 	return nil
 }

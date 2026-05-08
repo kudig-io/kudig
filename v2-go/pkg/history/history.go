@@ -2,6 +2,7 @@
 package history
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -235,9 +236,9 @@ func issueKey(issue types.Issue) string {
 
 // generateID generates a unique ID for a history entry
 func generateID() string {
-	timestamp := time.Now().UnixNano()
-	random := time.Now().Nanosecond()
-	data := fmt.Sprintf("%d-%d", timestamp, random)
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	data := fmt.Sprintf("%d-%x", time.Now().UnixNano(), b)
 	hash := sha256.Sum256([]byte(data))
 	return fmt.Sprintf("%x", hash)[:16]
 }

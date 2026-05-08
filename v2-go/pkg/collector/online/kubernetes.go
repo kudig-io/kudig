@@ -17,6 +17,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/klog/v2"
 
 	"github.com/kudig/kudig/pkg/collector"
 	"github.com/kudig/kudig/pkg/types"
@@ -24,7 +25,8 @@ import (
 
 // Collector collects diagnostic data from a live Kubernetes cluster
 type Collector struct {
-	client kubernetes.Interface
+	clientMu sync.Mutex
+	client   kubernetes.Interface
 }
 
 // NewCollector creates a new online collector
@@ -101,13 +103,26 @@ func (c *Collector) buildClient(config *collector.Config) (kubernetes.Interface,
 	return client, nil
 }
 
-// Collect gathers diagnostic data from the kubernetes cluster
-func (c *Collector) Collect(ctx context.Context, config *collector.Config) (*types.DiagnosticData, error) {
+func (c *Collector) getClient(config *collector.Config) (kubernetes.Interface, error) {
+	c.clientMu.Lock()
+	defer c.clientMu.Unlock()
+	if c.client != nil {
+		return c.client, nil
+	}
 	client, err := c.buildClient(config)
 	if err != nil {
 		return nil, err
 	}
 	c.client = client
+	return client, nil
+}
+
+// Collect gathers diagnostic data from the kubernetes cluster
+func (c *Collector) Collect(ctx context.Context, config *collector.Config) (*types.DiagnosticData, error) {
+	client, err := c.getClient(config)
+	if err != nil {
+		return nil, err
+	}
 
 	data := types.NewDiagnosticData(types.ModeOnline)
 	data.K8sClient = client
@@ -135,6 +150,7 @@ func (c *Collector) Collect(ctx context.Context, config *collector.Config) (*typ
 
 	// Collect cluster-wide data
 	if err := c.collectClusterData(ctx, config, data); err != nil {
+		klog.ErrorS(err, "Failed to collect cluster data")
 		return nil, fmt.Errorf("failed to collect cluster data: %w", err)
 	}
 
@@ -155,11 +171,10 @@ func (c *Collector) CollectAllNodesConcurrent(
 	config *collector.Config,
 	progressFn func(current, total int, nodeName string),
 ) ([]NodeResult, error) {
-	client, err := c.buildClient(config)
+	client, err := c.getClient(config)
 	if err != nil {
 		return nil, err
 	}
-	c.client = client
 
 	// Get all nodes
 	nodes, err := c.client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
@@ -230,7 +245,12 @@ func (c *Collector) CollectAllNodesConcurrent(
 
 // collectNodeData collects data for a specific node
 func (c *Collector) collectNodeData(ctx context.Context, nodeName string, data *types.DiagnosticData) error {
-	node, err := c.client.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
+	var node *corev1.Node
+	err := retryWithBackoff(ctx, 2, func() error {
+		var err error
+		node, err = c.client.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
+		return err
+	})
 	if err != nil {
 		return fmt.Errorf("failed to get node %s: %w", nodeName, err)
 	}
@@ -255,13 +275,17 @@ func (c *Collector) collectNodeData(ctx context.Context, nodeName string, data *
 
 	// Get node events
 	events, err := c.getNodeEvents(ctx, nodeName)
-	if err == nil && len(events) > 0 {
+	if err != nil {
+		klog.V(2).InfoS("Failed to get node events", "node", nodeName, "err", err)
+	} else if len(events) > 0 {
 		data.SetRawFile("k8s/node_events", []byte(strings.Join(events, "\n")))
 	}
 
 	// Get pods on node
 	pods, err := c.getPodsOnNode(ctx, nodeName)
-	if err == nil {
+	if err != nil {
+		klog.V(2).InfoS("Failed to get pods on node", "node", nodeName, "err", err)
+	} else {
 		data.SetRawFile("k8s/node_pods", []byte(pods))
 	}
 
@@ -309,46 +333,40 @@ func (c *Collector) collectClusterData(
 	config *collector.Config,
 	data *types.DiagnosticData,
 ) error {
-	// Get component statuses (deprecated in newer K8s but still useful)
-	componentStatuses, err := c.client.CoreV1().ComponentStatuses().List(ctx, metav1.ListOptions{})
-	if err == nil {
-		var status strings.Builder
-		for _, cs := range componentStatuses.Items {
-			healthy := "Healthy"
-			for _, cond := range cs.Conditions {
-				if cond.Type == corev1.ComponentHealthy && cond.Status != corev1.ConditionTrue {
-					healthy = "Unhealthy"
-					break
-				}
-			}
-			status.WriteString(fmt.Sprintf("%s\t%s\n", cs.Name, healthy))
-		}
-		data.SetRawFile("k8s/component_status", []byte(status.String()))
-	}
+	// ComponentStatuses API was removed in Kubernetes 1.21+
+	// Skip collection on modern clusters
 
 	// Get events from kube-system namespace
 	kubeSystemEvents, err := c.getNamespaceEvents(ctx, "kube-system")
-	if err == nil && len(kubeSystemEvents) > 0 {
+	if err != nil {
+		klog.V(2).InfoS("Failed to get kube-system events", "err", err)
+	} else if len(kubeSystemEvents) > 0 {
 		data.SetRawFile("k8s/kube_system_events", []byte(strings.Join(kubeSystemEvents, "\n")))
 	}
 
 	// Get target namespace events if specified
 	if config.Namespace != "" && config.Namespace != "kube-system" {
 		nsEvents, err := c.getNamespaceEvents(ctx, config.Namespace)
-		if err == nil && len(nsEvents) > 0 {
+		if err != nil {
+			klog.V(2).InfoS("Failed to get namespace events", "namespace", config.Namespace, "err", err)
+		} else if len(nsEvents) > 0 {
 			data.SetRawFile("k8s/namespace_events", []byte(strings.Join(nsEvents, "\n")))
 		}
 	}
 
 	// Get system pods status
 	systemPods, err := c.getSystemPodsStatus(ctx)
-	if err == nil {
+	if err != nil {
+		klog.V(2).InfoS("Failed to get system pods status", "err", err)
+	} else {
 		data.SetRawFile("k8s/system_pods", []byte(systemPods))
 	}
 
 	// Get daemonset status
 	daemonsets, err := c.getDaemonSetStatus(ctx)
-	if err == nil {
+	if err != nil {
+		klog.V(2).InfoS("Failed to get daemonset status", "err", err)
+	} else {
 		data.SetRawFile("k8s/daemonsets", []byte(daemonsets))
 	}
 
@@ -430,6 +448,7 @@ func (c *Collector) getNodeEvents(ctx context.Context, nodeName string) ([]strin
 func (c *Collector) getPodsOnNode(ctx context.Context, nodeName string) (string, error) {
 	pods, err := c.client.CoreV1().Pods("").List(ctx, metav1.ListOptions{
 		FieldSelector: fmt.Sprintf("spec.nodeName=%s", nodeName),
+		Limit:         500,
 	})
 	if err != nil {
 		return "", err
@@ -476,7 +495,9 @@ func (c *Collector) getNamespaceEvents(ctx context.Context, namespace string) ([
 
 // getSystemPodsStatus gets status of system pods
 func (c *Collector) getSystemPodsStatus(ctx context.Context) (string, error) {
-	pods, err := c.client.CoreV1().Pods("kube-system").List(ctx, metav1.ListOptions{})
+	pods, err := c.client.CoreV1().Pods("kube-system").List(ctx, metav1.ListOptions{
+		Limit: 500,
+	})
 	if err != nil {
 		return "", err
 	}
@@ -638,6 +659,29 @@ func homeDir() string {
 		return h
 	}
 	return os.Getenv("USERPROFILE") // Windows
+}
+
+// retryWithBackoff retries a function with exponential backoff
+func retryWithBackoff(ctx context.Context, maxRetries int, fn func() error) error {
+	var lastErr error
+	for i := 0; i <= maxRetries; i++ {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if lastErr = fn(); lastErr == nil {
+			return nil
+		}
+		if i < maxRetries {
+			backoff := time.Duration(1<<uint(i)) * 500 * time.Millisecond
+			klog.V(2).InfoS("Retrying after error", "attempt", i+1, "backoff", backoff, "err", lastErr)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
+	}
+	return lastErr
 }
 
 // init registers the collector with the default factory

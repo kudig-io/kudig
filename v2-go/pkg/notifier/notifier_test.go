@@ -138,8 +138,8 @@ func TestNewMultiNotifier(t *testing.T) {
 
 	mn := NewMultiNotifier(config)
 
-	if len(mn.notifiers) != 3 {
-		t.Errorf("Expected 3 notifiers, got %d", len(mn.notifiers))
+	if len(mn.Notifiers) != 3 {
+		t.Errorf("Expected 3 notifiers, got %d", len(mn.Notifiers))
 	}
 }
 

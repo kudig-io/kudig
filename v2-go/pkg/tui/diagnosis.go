@@ -1,8 +1,12 @@
 package tui
 
 import (
+	"fmt"
+
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/kudig/kudig/pkg/analyzer"
+	"github.com/kudig/kudig/pkg/collector"
 	"github.com/kudig/kudig/pkg/types"
 )
 
@@ -16,17 +20,53 @@ type DiagnosisCompleteMsg struct {
 // startDiagnosis starts the diagnosis process
 func (m Model) startDiagnosis() tea.Cmd {
 	return func() tea.Msg {
-		// This is a placeholder that returns an empty result
-		// In a real implementation, this would:
-		// 1. Get the appropriate collector based on mode
-		// 2. Collect diagnostic data
-		// 3. Run analyzers
-		// 4. Return the results
+		mode := types.ModeOnline
+		var cfg *collector.Config
 
-		// For now, return empty result to allow compilation
+		if m.onlineMode {
+			mode = types.ModeOnline
+			cfg = collector.NewOnlineConfig(m.kubeconfig, m.nodeName)
+			cfg.Namespace = m.namespace
+		} else {
+			mode = types.ModeOffline
+			cfg = collector.NewOfflineConfig(m.diagnosePath)
+		}
+
+		coll, ok := collector.GetCollector(mode)
+		if !ok {
+			return DiagnosisCompleteMsg{
+				Error: fmt.Errorf("%s mode collector not available", mode),
+			}
+		}
+
+		if err := coll.Validate(cfg); err != nil {
+			return DiagnosisCompleteMsg{
+				Error: fmt.Errorf("collector validation failed: %w", err),
+			}
+		}
+
+		data, err := coll.Collect(m.context, cfg)
+		if err != nil {
+			return DiagnosisCompleteMsg{
+				Error: fmt.Errorf("data collection failed: %w", err),
+			}
+		}
+
+		results, err := analyzer.DefaultRegistry.ExecuteAll(m.context, data)
+		if err != nil {
+			return DiagnosisCompleteMsg{
+				Error: fmt.Errorf("analysis failed: %w", err),
+			}
+		}
+
+		issues := analyzer.CollectIssues(results)
+		if issues == nil {
+			issues = []types.Issue{}
+		}
+
 		return DiagnosisCompleteMsg{
-			Issues: []types.Issue{},
-			Data:   nil,
+			Issues: issues,
+			Data:   data,
 			Error:  nil,
 		}
 	}

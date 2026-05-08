@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -28,14 +29,14 @@ type NodeDiagnosticReconciler struct {
 //+kubebuilder:rbac:groups=kudig.io,resources=nodediagnostics,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=kudig.io,resources=nodediagnostics/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=kudig.io,resources=nodediagnostics/finalizers,verbs=update
-//+kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=apps,resources=daemonsets,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
+//+kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is the main reconciliation loop
 func (r *NodeDiagnosticReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 
-	// Fetch the NodeDiagnostic instance
 	diagnostic := &kudigv1.NodeDiagnostic{}
 	if err := r.Get(ctx, req.NamespacedName, diagnostic); err != nil {
 		if errors.IsNotFound(err) {
@@ -46,12 +47,10 @@ func (r *NodeDiagnosticReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 
-	// Check if already completed
 	if diagnostic.Status.Phase == "Completed" || diagnostic.Status.Phase == "Failed" {
 		return ctrl.Result{}, nil
 	}
 
-	// Get target nodes
 	targetNodes, err := r.getTargetNodes(ctx, diagnostic)
 	if err != nil {
 		log.Error(err, "Failed to get target nodes")
@@ -78,69 +77,103 @@ func (r *NodeDiagnosticReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, nil
 	}
 
-	// Initialize status if not set
 	if diagnostic.Status.Phase == "" {
 		diagnostic.Status.Phase = "Running"
 		diagnostic.Status.StartTime = &metav1.Time{Time: time.Now()}
 		diagnostic.Status.NodeResults = make([]kudigv1.NodeResult, 0, len(targetNodes))
-
 		for _, node := range targetNodes {
 			diagnostic.Status.NodeResults = append(diagnostic.Status.NodeResults, kudigv1.NodeResult{
 				NodeName: node,
 				Phase:    "Pending",
 			})
 		}
-
 		if err := r.Status().Update(ctx, diagnostic); err != nil {
 			log.Error(err, "Failed to update NodeDiagnostic status")
 			return ctrl.Result{}, err
 		}
 	}
 
-	// Create DaemonSet to run diagnostics on each node
 	dsName := fmt.Sprintf("kudig-node-%s", diagnostic.Name)
-	found := &batchv1.Job{}
+	found := &appsv1.DaemonSet{}
 	err = r.Get(ctx, types.NamespacedName{Name: dsName, Namespace: "kudig-system"}, found)
 	if err != nil && errors.IsNotFound(err) {
-		// Create DaemonSet-like Job for node diagnostics
-		// For simplicity, we create a single job that runs on all nodes using host networking
-		job := r.jobForNodeDiagnostic(diagnostic, dsName, targetNodes)
-		log.Info("Creating a new Job for node diagnostics", "Job.Namespace", job.Namespace, "Job.Name", job.Name)
-		if err := r.Create(ctx, job); err != nil {
-			log.Error(err, "Failed to create new Job")
+		ds := r.daemonSetForNodeDiagnostic(diagnostic, dsName, targetNodes)
+		log.Info("Creating DaemonSet for node diagnostics", "DaemonSet.Namespace", ds.Namespace, "DaemonSet.Name", ds.Name)
+		if err := r.Create(ctx, ds); err != nil {
+			log.Error(err, "Failed to create DaemonSet")
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	} else if err != nil {
-		log.Error(err, "Failed to get Job")
+		log.Error(err, "Failed to get DaemonSet")
 		return ctrl.Result{}, err
 	}
 
-	// Check job status
-	if found.Status.Succeeded > 0 {
+	// Check DaemonSet status
+	desired := found.Status.DesiredNumberScheduled
+	completed := found.Status.NumberReady
+	failed := found.Status.NumberUnavailable
+
+	if desired == 0 {
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+
+	// Collect per-node results from ConfigMaps
+	for i := range diagnostic.Status.NodeResults {
+		nodeName := diagnostic.Status.NodeResults[i].NodeName
+		if diagnostic.Status.NodeResults[i].Phase == "Completed" {
+			continue
+		}
+		cmName := fmt.Sprintf("kudig-result-%s-%s", diagnostic.Name, nodeName)
+		cm := &corev1.ConfigMap{}
+		if err := r.Get(ctx, types.NamespacedName{Name: cmName, Namespace: "kudig-system"}, cm); err == nil {
+			if summary, ok := cm.Data["summary"]; ok {
+				diagnostic.Status.NodeResults[i].Phase = "Completed"
+				diagnostic.Status.NodeResults[i].Summary = summary
+			}
+		}
+	}
+
+	allCompleted := true
+	for _, nr := range diagnostic.Status.NodeResults {
+		if nr.Phase != "Completed" {
+			allCompleted = false
+			break
+		}
+	}
+
+	if allCompleted && completed >= desired {
 		diagnostic.Status.Phase = "Completed"
 		now := metav1.Now()
 		diagnostic.Status.CompletionTime = &now
-
-		// Update all node results
-		for i := range diagnostic.Status.NodeResults {
-			diagnostic.Status.NodeResults[i].Phase = "Completed"
+		condition := kudigv1.DiagnosticCondition{
+			Type:               "Completed",
+			Status:             "True",
+			LastTransitionTime: now,
+			Reason:             "AllNodesCompleted",
+			Message:            fmt.Sprintf("All %d nodes completed diagnostics", desired),
 		}
-
-		if err := r.Status().Update(ctx, diagnostic); err != nil {
-			log.Error(err, "Failed to update NodeDiagnostic status")
-			return ctrl.Result{}, err
-		}
-	} else if found.Status.Failed > 0 {
+		diagnostic.Status.Conditions = append(diagnostic.Status.Conditions, condition)
+	} else if failed > 0 && completed+failed >= desired {
 		diagnostic.Status.Phase = "Failed"
 		now := metav1.Now()
 		diagnostic.Status.CompletionTime = &now
-
-		if err := r.Status().Update(ctx, diagnostic); err != nil {
-			log.Error(err, "Failed to update NodeDiagnostic status")
-			return ctrl.Result{}, err
+		condition := kudigv1.DiagnosticCondition{
+			Type:               "Failed",
+			Status:             "True",
+			LastTransitionTime: now,
+			Reason:             "NodeFailures",
+			Message:            fmt.Sprintf("%d of %d nodes failed", failed, desired),
 		}
-	} else {
+		diagnostic.Status.Conditions = append(diagnostic.Status.Conditions, condition)
+	}
+
+	if err := r.Status().Update(ctx, diagnostic); err != nil {
+		log.Error(err, "Failed to update NodeDiagnostic status")
+		return ctrl.Result{}, err
+	}
+
+	if diagnostic.Status.Phase == "Running" {
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
@@ -149,12 +182,10 @@ func (r *NodeDiagnosticReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 // getTargetNodes returns the list of nodes to diagnose
 func (r *NodeDiagnosticReconciler) getTargetNodes(ctx context.Context, diagnostic *kudigv1.NodeDiagnostic) ([]string, error) {
-	// If specific node names are provided, use them
 	if len(diagnostic.Spec.NodeNames) > 0 {
 		return diagnostic.Spec.NodeNames, nil
 	}
 
-	// Otherwise, use node selector
 	nodeList := &corev1.NodeList{}
 	selector := labels.Everything()
 	if len(diagnostic.Spec.NodeSelector) > 0 {
@@ -175,31 +206,23 @@ func (r *NodeDiagnosticReconciler) getTargetNodes(ctx context.Context, diagnosti
 	for _, node := range nodeList.Items {
 		nodes = append(nodes, node.Name)
 	}
-
 	return nodes, nil
 }
 
-// jobForNodeDiagnostic creates a Job for a NodeDiagnostic resource
-func (r *NodeDiagnosticReconciler) jobForNodeDiagnostic(diagnostic *kudigv1.NodeDiagnostic, jobName string, nodes []string) *batchv1.Job {
-	labels := map[string]string{
+// daemonSetForNodeDiagnostic creates a DaemonSet for a NodeDiagnostic resource
+func (r *NodeDiagnosticReconciler) daemonSetForNodeDiagnostic(diagnostic *kudigv1.NodeDiagnostic, dsName string, nodes []string) *appsv1.DaemonSet {
+	lbls := map[string]string{
 		"app":                 "kudig",
 		"kudig.io/diagnostic": diagnostic.Name,
 		"kudig.io/type":       "node",
 		"kudig.io/created-by": "operator",
 	}
 
-	// Build command arguments
 	args := []string{"online", "--all-nodes", "--format", diagnostic.Spec.OutputFormat}
-	if len(diagnostic.Spec.Analyzers) > 0 {
-		for _, analyzer := range diagnostic.Spec.Analyzers {
-			args = append(args, "--analyzer", analyzer)
-		}
+	for _, analyzer := range diagnostic.Spec.Analyzers {
+		args = append(args, "--analyzer", analyzer)
 	}
 
-	backoffLimit := int32(2)
-	ttlSecondsAfterFinished := int32(3600)
-
-	// Add node names as env var for reference
 	nodeNamesEnv := ""
 	for i, node := range nodes {
 		if i > 0 {
@@ -208,48 +231,90 @@ func (r *NodeDiagnosticReconciler) jobForNodeDiagnostic(diagnostic *kudigv1.Node
 		nodeNamesEnv += node
 	}
 
-	job := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      jobName,
-			Namespace: "kudig-system",
-			Labels:    labels,
+	podSpec := corev1.PodSpec{
+		HostNetwork:   true,
+		HostPID:       true,
+		RestartPolicy: corev1.RestartPolicyOnFailure,
+		Containers: []corev1.Container{{
+			Name:    "kudig",
+			Image:   "kudig/kudig:latest",
+			Command: []string{"/usr/local/bin/kudig"},
+			Args:    args,
+			SecurityContext: &corev1.SecurityContext{
+				Privileged: ptrBool(true),
+			},
+			Env: []corev1.EnvVar{
+				{Name: "TARGET_NODES", Value: nodeNamesEnv},
+				{Name: "KUDIG_RESULT_CONFIGMAP", Value: fmt.Sprintf("kudig-result-%s", diagnostic.Name)},
+				{
+					Name: "NODE_NAME",
+					ValueFrom: &corev1.EnvVarSource{
+						FieldRef: &corev1.ObjectFieldSelector{
+							FieldPath: "spec.nodeName",
+						},
+					},
+				},
+			},
+		}},
+		ServiceAccountName: "kudig-operator",
+		Tolerations: []corev1.Toleration{
+			{Operator: corev1.TolerationOpExists},
 		},
-		Spec: batchv1.JobSpec{
-			BackoffLimit:            &backoffLimit,
-			TTLSecondsAfterFinished: &ttlSecondsAfterFinished,
+	}
+
+	// When specific node names are given, use node affinity to limit DaemonSet placement
+	if len(diagnostic.Spec.NodeNames) > 0 {
+		terms := make([]corev1.NodeSelectorTerm, 0, 1)
+		matchExprs := make([]corev1.NodeSelectorRequirement, 0, 1)
+		matchExprs = append(matchExprs, corev1.NodeSelectorRequirement{
+			Key:      "kubernetes.io/hostname",
+			Operator: corev1.NodeSelectorOpIn,
+			Values:   nodes,
+		})
+		terms = append(terms, corev1.NodeSelectorTerm{
+			MatchExpressions: matchExprs,
+		})
+		podSpec.Affinity = &corev1.Affinity{
+			NodeAffinity: &corev1.NodeAffinity{
+				RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+					NodeSelectorTerms: terms,
+				},
+			},
+		}
+	} else if len(diagnostic.Spec.NodeSelector) > 0 {
+		podSpec.NodeSelector = diagnostic.Spec.NodeSelector
+	}
+
+	ds := &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      dsName,
+			Namespace: "kudig-system",
+			Labels:    lbls,
+		},
+		Spec: appsv1.DaemonSetSpec{
+			Selector: &metav1.LabelSelector{
+				MatchLabels: lbls,
+			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels: labels,
+					Labels: lbls,
 				},
-				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyNever,
-					Containers: []corev1.Container{{
-						Name:    "kudig",
-						Image:   "kudig/kudig:latest",
-						Command: []string{"/usr/local/bin/kudig"},
-						Args:    args,
-						Env: []corev1.EnvVar{
-							{
-								Name:  "TARGET_NODES",
-								Value: nodeNamesEnv,
-							},
-						},
-					}},
-					ServiceAccountName: "kudig-operator",
-				},
+				Spec: podSpec,
 			},
 		},
 	}
 
-	ctrl.SetControllerReference(diagnostic, job, r.Scheme)
-
-	return job
+	ctrl.SetControllerReference(diagnostic, ds, r.Scheme)
+	return ds
 }
+
+func ptrBool(b bool) *bool { return &b }
 
 // SetupWithManager sets up the controller with the Manager
 func (r *NodeDiagnosticReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kudigv1.NodeDiagnostic{}).
+		Owns(&appsv1.DaemonSet{}).
 		Owns(&batchv1.Job{}).
 		Complete(r)
 }

@@ -114,10 +114,11 @@ type Model struct {
 	diagResult  *types.DiagnosticData
 
 	// Inputs
-	kubeconfig  string
-	nodeName    string
-	namespace   string
-	onlineMode  bool
+	kubeconfig   string
+	nodeName     string
+	namespace    string
+	diagnosePath string
+	onlineMode   bool
 
 	// Messages
 	message     string

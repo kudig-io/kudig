@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/kudig/kudig/pkg/types"
 	"github.com/sashabaranov/go-openai"
@@ -138,11 +139,14 @@ func (p *OpenAIProvider) Analyze(ctx context.Context, issues []types.Issue, host
 		}, nil
 	}
 
+	timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(p.config.Timeout)*time.Second)
+	defer cancel()
+
 	// Prepare prompt
 	prompt := p.buildAnalysisPrompt(issues, hostname)
 
 	// Create chat completion
-	resp, err := p.client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
+	resp, err := p.client.CreateChatCompletion(timeoutCtx, openai.ChatCompletionRequest{
 		Model:       p.config.Model,
 		MaxTokens:   p.config.MaxTokens,
 		Temperature: float32(p.config.Temperature),

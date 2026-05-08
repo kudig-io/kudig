@@ -3,6 +3,7 @@ package controllers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -85,14 +86,16 @@ func (r *ClusterDiagnosticReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		now := metav1.Now()
 		diagnostic.Status.CompletionTime = &now
 
-		// TODO: Parse job output to populate summary
-		diagnostic.Status.Summary = kudigv1.DiagnosticSummary{
-			Total:        0,
-			Critical:     0,
-			Warning:      0,
-			Info:         0,
-			AnalyzersRun: len(diagnostic.Spec.Analyzers),
+		// Try to read results from the job's output configmap
+		summary := r.parseJobResult(ctx, diagnostic.Name)
+		if summary != nil {
+			diagnostic.Status.Summary = *summary
+		} else {
+			diagnostic.Status.Summary = kudigv1.DiagnosticSummary{
+				AnalyzersRun: len(diagnostic.Spec.Analyzers),
+			}
 		}
+		diagnostic.Status.Summary.AnalyzersRun = len(diagnostic.Spec.Analyzers)
 
 		if err := r.Status().Update(ctx, diagnostic); err != nil {
 			log.Error(err, "Failed to update ClusterDiagnostic status")
@@ -179,6 +182,10 @@ func (r *ClusterDiagnosticReconciler) jobForClusterDiagnostic(diagnostic *kudigv
 									},
 								},
 							},
+							{
+								Name:  "KUDIG_RESULT_CONFIGMAP",
+								Value: fmt.Sprintf("kudig-result-%s", diagnostic.Name),
+							},
 						},
 					}},
 					ServiceAccountName: "kudig-operator",
@@ -191,6 +198,29 @@ func (r *ClusterDiagnosticReconciler) jobForClusterDiagnostic(diagnostic *kudigv
 	ctrl.SetControllerReference(diagnostic, job, r.Scheme)
 
 	return job
+}
+
+// parseJobResult reads the diagnostic result configmap created by the job
+func (r *ClusterDiagnosticReconciler) parseJobResult(ctx context.Context, diagnosticName string) *kudigv1.DiagnosticSummary {
+	log := log.FromContext(ctx)
+	cmName := fmt.Sprintf("kudig-result-%s", diagnosticName)
+	cm := &corev1.ConfigMap{}
+	if err := r.Get(ctx, types.NamespacedName{Name: cmName, Namespace: "kudig-system"}, cm); err != nil {
+		log.V(1).Info("No result ConfigMap found", "name", cmName, "err", err)
+		return nil
+	}
+
+	data, ok := cm.Data["summary"]
+	if !ok {
+		return nil
+	}
+
+	var summary kudigv1.DiagnosticSummary
+	if err := json.Unmarshal([]byte(data), &summary); err != nil {
+		log.V(1).Info("Failed to parse result summary", "err", err)
+		return nil
+	}
+	return &summary
 }
 
 // SetupWithManager sets up the controller with the Manager

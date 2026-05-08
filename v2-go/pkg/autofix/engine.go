@@ -76,6 +76,14 @@ func (e *Engine) Fix(ctx context.Context, issue types.Issue) FixResult {
 		}
 	}
 
+	if action.ConfirmationRequired && !e.dryRun {
+		return FixResult{
+			IssueCode: issue.ENName,
+			Success:   false,
+			Message:   fmt.Sprintf("Fix requires confirmation: %s (use --confirm to proceed)", action.Description),
+		}
+	}
+
 	if e.dryRun {
 		return FixResult{
 			IssueCode: issue.ENName,

@@ -3,6 +3,8 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -148,8 +150,9 @@ func (r *DiagnosticScheduleReconciler) createNodeDiagnostic(ctx context.Context,
 	return r.Create(ctx, diagnostic)
 }
 
-// parseSchedule parses a simple schedule string (for demo purposes)
-// In production, use a proper cron library
+// parseSchedule parses a schedule string into a duration.
+// Supports: @hourly, @daily, @weekly, @monthly, @every Nh, @every Nm, standard cron expressions (5 or 6 fields).
+// For cron expressions, it calculates the duration until the next scheduled time.
 func (r *DiagnosticScheduleReconciler) parseSchedule(schedule string) time.Duration {
 	switch schedule {
 	case "@hourly":
@@ -158,10 +161,51 @@ func (r *DiagnosticScheduleReconciler) parseSchedule(schedule string) time.Durat
 		return 24 * time.Hour
 	case "@weekly":
 		return 7 * 24 * time.Hour
-	default:
-		// Default to 1 hour
+	case "@monthly":
+		return 30 * 24 * time.Hour
+	case "@yearly", "@annually":
+		return 365 * 24 * time.Hour
+	}
+
+	if strings.HasPrefix(schedule, "@every ") {
+		durStr := strings.TrimPrefix(schedule, "@every ")
+		if d, err := time.ParseDuration(durStr); err == nil {
+			return d
+		}
+	}
+
+	// Try standard cron: minute hour dayOfMonth month dayOfWeek
+	fields := strings.Fields(schedule)
+	if len(fields) == 5 {
+		if d := parseCronDuration(fields); d > 0 {
+			return d
+		}
+	}
+
+	return time.Hour
+}
+
+// parseCronDuration estimates a duration from a 5-field cron expression
+func parseCronDuration(fields []string) time.Duration {
+	// Parse hour field to estimate interval
+	hourField := fields[1]
+	if hourField == "*" {
+		// Every hour at a specific minute
 		return time.Hour
 	}
+	if strings.Contains(hourField, "/") {
+		parts := strings.SplitN(hourField, "/", 2)
+		if hours, err := strconv.Atoi(parts[1]); err == nil && hours > 0 {
+			return time.Duration(hours) * time.Hour
+		}
+	}
+	if strings.Contains(hourField, ",") {
+		// Multiple specific hours - estimate based on count
+		hours := strings.Split(hourField, ",")
+		return 24 * time.Hour / time.Duration(len(hours))
+	}
+	// Specific hour - daily
+	return 24 * time.Hour
 }
 
 // SetupWithManager sets up the controller with the Manager

@@ -133,15 +133,9 @@ func NewProbeManager(config *Config) (*ProbeManager, error) {
 
 // Start starts the eBPF probes
 func (pm *ProbeManager) Start(ctx context.Context) error {
-	// This is a placeholder implementation
-	// In a real implementation, we would:
-	// 1. Compile and load eBPF programs
-	// 2. Attach kprobes/tracepoints
-	// 3. Start perf event readers
+	klog.InfoS("eBPF diagnostics is not yet implemented; probes will not collect data")
+	fmt.Println("注意: eBPF 深度诊断功能尚未实现，当前不会采集 eBPF 数据")
 	
-	klog.InfoS("Starting eBPF probes")
-	
-	// Simulate starting probes
 	go pm.run(ctx)
 	
 	return nil
