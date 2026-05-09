@@ -35,10 +35,12 @@
 
 ### Changed
 - `kudig trace` and `kudig multicluster` now explicitly return errors instead of silently returning fake data
-- Test coverage improved from ~30% to 52.5%
+- Test coverage improved from ~30% → 52.2% → 59.7%
+- 6 packages reached 100% coverage: `process`, `runtime`, `legacy`, `log`, `system`, `collector`
 
 ### Known Limitations
 - eBPF analyzers (TCP/DNS/FileIO) are registered but return empty data — no BPF programs exist yet
 - `kudig trace` and `kudig multicluster` are not implemented
 - No E2E tests with real Kubernetes clusters
 - CLI layer (`cmd/kudig/main.go`) has 0% test coverage
+- Online collector has 9.9% coverage (requires K8s cluster for meaningful testing)
